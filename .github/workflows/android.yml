@@ -16,7 +16,18 @@ jobs:
       env:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-    - name: set up JDK 8
+    - name: set up JDK 17 for sdkmanager
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+      env:
+        FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    - name: Install Android SDK packages
+      run: echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-21" "build-tools;21.1.2"
+
+    - name: set up JDK 8 for build
       uses: actions/setup-java@v4
       with:
         java-version: '8'
@@ -24,9 +35,6 @@ jobs:
         cache: gradle
       env:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-    - name: Install Android SDK packages
-      run: echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-21" "build-tools;21.1.2"
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
