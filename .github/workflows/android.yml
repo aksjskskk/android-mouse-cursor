@@ -37,6 +37,12 @@ jobs:
       env:
         FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+    - name: Install system dependencies (for 32-bit aapt)
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt-get install -y zlib1g:i386 libc6:i386 libstdc++6:i386
+
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
