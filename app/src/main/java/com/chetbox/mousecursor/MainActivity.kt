@@ -91,6 +91,7 @@ fun MainScreen(
     var alpha by remember { mutableStateOf(sharedPreferences.getFloat("touchpad_alpha", 0.5f)) }
     var sizeMultiplier by remember { mutableStateOf(sharedPreferences.getFloat("touchpad_size", 1.0f)) }
     var cursorSizeMultiplier by remember { mutableStateOf(sharedPreferences.getFloat("cursor_size", 1.0f)) }
+    var sensitivity by remember { mutableStateOf(sharedPreferences.getFloat("mouse_sensitivity", 1.5f)) }
     var fullScreenMode by remember { mutableStateOf(sharedPreferences.getBoolean("full_screen_mode", false)) }
 
     Column(
@@ -178,6 +179,18 @@ fun MainScreen(
                 sharedPreferences.edit().putFloat("cursor_size", it).apply()
             },
             valueRange = 0.5f..3.0f
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text("Mouse Sensitivity")
+        Slider(
+            value = sensitivity,
+            onValueChange = {
+                sensitivity = it
+                sharedPreferences.edit().putFloat("mouse_sensitivity", it).apply()
+            },
+            valueRange = 0.5f..5.0f
         )
     }
 }

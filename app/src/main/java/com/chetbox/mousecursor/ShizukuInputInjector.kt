@@ -18,12 +18,16 @@ class ShizukuInputInjector(private val context: Context) {
 
         Thread {
             try {
+                // Shell commands like 'input tap' often require integer coordinates
+                val intX = x.toInt()
+                val intY = y.toInt()
+
                 val command = if (leftClick) {
                     // Standard tap for left click
-                    "input tap $x $y"
+                    "input tap $intX $intY"
                 } else {
                     // Long press for right click (swipe from same point to same point over 1000ms)
-                    "input swipe $x $y $x $y 1000"
+                    "input swipe $intX $intY $intX $intY 1000"
                 }
 
                 val shizukuCommand = arrayOf("sh", "-c", command)
@@ -32,6 +36,12 @@ class ShizukuInputInjector(private val context: Context) {
                 val newProcessMethod = processClass.getMethod("newProcess", Array<String>::class.java, Array<String>::class.java, String::class.java)
                 val process = newProcessMethod.invoke(null, shizukuCommand, null, null) as Process
                 process.waitFor()
+
+                // Read errors if any
+                val errorOutput = process.errorStream.bufferedReader().use { it.readText() }
+                if (errorOutput.isNotEmpty()) {
+                    Log.e("ShizukuInputInjector", "Shizuku Error: $errorOutput")
+                }
 
             } catch (e: Exception) {
                 Log.e("ShizukuInputInjector", "Failed to inject click via Shizuku shell: ${e.message}")

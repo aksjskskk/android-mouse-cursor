@@ -20,7 +20,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import androidx.core.app.NotificationCompat
 
-class TouchpadService : Service() {
+class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeListener {
 
     private lateinit var windowManager: WindowManager
     private lateinit var touchpadView: View
@@ -72,6 +72,29 @@ class TouchpadService : Service() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         setupCursor()
         setupTouchpad()
+
+        sharedPreferences.registerOnSharedPreferenceChangeListener(this)
+    }
+
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
+        if (key == "cursor_size") {
+            val cursorSizeMultiplier = sharedPreferences?.getFloat("cursor_size", 1.0f) ?: 1.0f
+            val baseCursorSize = 64
+            val finalCursorSize = (baseCursorSize * cursorSizeMultiplier).toInt()
+
+            if (::cursorView.isInitialized) {
+                val params = cursorView.layoutParams as WindowManager.LayoutParams
+                params.width = finalCursorSize
+                params.height = finalCursorSize
+                windowManager.updateViewLayout(cursorView, params)
+            }
+        } else if (key == "touchpad_alpha" || key == "touchpad_size" || key == "full_screen_mode") {
+            // Re-setup touchpad to apply these changes properly
+            if (::touchpadView.isInitialized) {
+                windowManager.removeView(touchpadView)
+            }
+            setupTouchpad()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -208,7 +231,7 @@ class TouchpadService : Service() {
                     val dy = event.rawY - lastY
 
                     // Mouse acceleration / sensitivity
-                    val sensitivity = 1.5f
+                    val sensitivity = sharedPreferences.getFloat("mouse_sensitivity", 1.5f)
 
                     cursorX += dx * sensitivity
                     cursorY += dy * sensitivity
@@ -247,6 +270,7 @@ class TouchpadService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
         if (::touchpadView.isInitialized) windowManager.removeView(touchpadView)
         if (::cursorView.isInitialized) windowManager.removeView(cursorView)
     }
