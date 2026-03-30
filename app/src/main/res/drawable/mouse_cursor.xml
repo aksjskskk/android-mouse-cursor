@@ -4,12 +4,13 @@
     android:height="44dp"
     android:viewportWidth="32"
     android:viewportHeight="44">
+    <!-- High-quality classic white mouse cursor with black outline -->
     <!-- Black Outline -->
     <path
         android:fillColor="#000000"
-        android:pathData="M3,0 L32,29 L19,29 L25,41 L18,44 L11,31 L2,41 Z"/>
+        android:pathData="M 6.0 1.0 L 29.0 24.0 L 19.0 24.0 L 23.5 35.0 L 18.5 37.0 L 14.0 26.0 L 6.0 34.0 Z" />
     <!-- Solid White Fill -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M6,6 L25,25 L16,25 L21,37 L18,39 L12,26 L6,32 Z"/>
+        android:pathData="M 8.0 5.0 L 8.0 29.0 L 13.0 24.0 L 18.0 35.5 L 20.5 34.5 L 15.5 23.0 L 23.5 23.0 Z" />
 </vector>
