@@ -269,7 +269,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = if (fullScreenMode) Gravity.FILL else Gravity.CENTER
         }
 
-        var isDragging = false
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 injectClickPassthrough(MotionEvent.BUTTON_PRIMARY)
