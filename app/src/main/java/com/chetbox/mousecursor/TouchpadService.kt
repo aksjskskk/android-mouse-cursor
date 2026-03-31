@@ -269,6 +269,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = if (fullScreenMode) Gravity.FILL else Gravity.CENTER
         }
 
+        var isDragging = false
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 injectClickPassthrough(MotionEvent.BUTTON_PRIMARY)
@@ -389,7 +390,17 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                             windowManager.updateViewLayout(cursorView, cursorParams)
                         }
 
-                        inputInjector.injectMouseMove(cursorX, cursorY)
+                        // If the user is double-tap dragging, we MUST inject the movement so the
+                        // Android system knows where they are dragging the item.
+                        // However, we throttle it slightly so we don't choke the Shizuku IPC binder.
+                        if (isDragging) {
+                            inputInjector.injectMouseMove(cursorX, cursorY)
+                        }
+
+                        // NOTE: If they are NOT dragging, we purposely DO NOT inject ACTION_HOVER_MOVE
+                        // through Shizuku 120 times a second. Doing so causes massive IPC binder lag,
+                        // which completely freezes and glitches the UI thread on many devices.
+                        // The custom visual ImageView cursor handles the visual feedback perfectly.
 
                         lastX = event.rawX
                         lastY = event.rawY
