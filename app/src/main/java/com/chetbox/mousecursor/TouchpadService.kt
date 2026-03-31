@@ -9,9 +9,10 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.DisplayMetrics
-import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -39,6 +40,17 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
     private lateinit var inputInjector: ShizukuInputInjector
 
     private val CHANNEL_ID = "TouchpadServiceChannel"
+    
+    // Double-tap detection for right click
+    private var lastTapTime = 0L
+    private val DOUBLE_TAP_TIMEOUT = 300L // ms
+    
+    // Track active pointers for smooth movement
+    private var activePointerId = -1
+    private var lastX = 0f
+    private var lastY = 0f
+    private var isTwoFingerScroll = false
+    private var scrollStartY = 0f
 
     override fun onCreate() {
         super.onCreate()
@@ -141,22 +153,13 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         return START_STICKY
     }
 
-    // Queue to hold clicks that occur while the user is still touching the screen.
-    // Toggling window flags while a finger is down breaks the active gesture, causing a freeze.
-    private val pendingClicks = mutableListOf<Int>()
-    private var isFingerDown = false
-
+    // Track long press state
+    private var longPressHandler = Handler(Looper.getMainLooper())
+    private var longPressRunnable: Runnable? = null
+    private var isLongPressing = false
+    
+    // Execute click immediately without deferring
     private fun injectClickPassthrough(buttonState: Int) {
-        if (isFingerDown) {
-            // Defer the click until the user completely lifts all fingers (ACTION_UP)
-            pendingClicks.add(buttonState)
-            return
-        }
-
-        executeClickPassthrough(buttonState)
-    }
-
-    private fun executeClickPassthrough(buttonState: Int) {
         if (!::touchpadView.isInitialized) return
 
         // To allow the native hardware mouse click to actually hit the apps underneath our
@@ -171,12 +174,10 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         Thread {
             inputInjector.injectMouseClick(cursorX, cursorY, buttonState)
 
-            // Because we are using ASYNC injection, we must sleep just long enough to let the
-            // Android OS input dispatcher route the click to the background app before we
-            // restore the touchpad's touchability.
-            Thread.sleep(100)
+            // Minimal delay to let the click register
+            Thread.sleep(50)
 
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
+            Handler(Looper.getMainLooper()).post {
                 if (::touchpadView.isInitialized) {
                     params.flags = originalFlags
                     windowManager.updateViewLayout(touchpadView, params)
@@ -268,106 +269,125 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = if (fullScreenMode) Gravity.FILL else Gravity.CENTER
         }
 
-        val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                injectClickPassthrough(MotionEvent.BUTTON_PRIMARY)
-                return true
-            }
-
-            override fun onLongPress(e: MotionEvent) {
-                injectClickPassthrough(MotionEvent.BUTTON_SECONDARY)
-            }
-        })
-
-        var lastX = 0f
-        var lastY = 0f
-        var isTwoFingerScroll = false
-
         touchpadView.setOnTouchListener { _, event ->
             // Prevent infinite loops by totally ignoring our own injected native mouse events
             if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
                 return@setOnTouchListener false
             }
 
-            gestureDetector.onTouchEvent(event)
-
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    isFingerDown = true
+                    activePointerId = event.getPointerId(0)
                     lastX = event.rawX
                     lastY = event.rawY
                     isTwoFingerScroll = false
+                    
+                    // Cancel any pending long press
+                    longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
+                    isLongPressing = false
+                    
+                    // Schedule long press for left click (long press = normal tap hold)
+                    longPressRunnable = Runnable {
+                        isLongPressing = true
+                        injectClickPassthrough(MotionEvent.BUTTON_PRIMARY)
+                    }
+                    longPressHandler.postDelayed(longPressRunnable!!, 400) // Long press threshold
+                    
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
-                    isFingerDown = true
                     if (event.pointerCount == 2) {
+                        // Two fingers down - start scrolling mode
                         isTwoFingerScroll = true
-                        lastY = event.getY(0) // Track vertical movement of the first finger for scrolling
+                        scrollStartY = (event.getY(0) + event.getY(1)) / 2
+                        
+                        // Cancel long press when second finger comes down
+                        longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
                     }
                     true
                 }
                 MotionEvent.ACTION_POINTER_UP -> {
-                    if (event.pointerCount == 2 && !isTwoFingerScroll) {
-                        // 2-finger tap for right click (optional alternative to long press)
-                        injectClickPassthrough(MotionEvent.BUTTON_SECONDARY)
+                    if (event.pointerCount == 1 && isTwoFingerScroll) {
+                        // Just finished two-finger scroll, don't trigger any click
+                        isTwoFingerScroll = false
+                    } else if (event.pointerCount == 1) {
+                        // Check for double-tap (right click)
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastTapTime < DOUBLE_TAP_TIMEOUT) {
+                            // Double tap detected - right click
+                            injectClickPassthrough(MotionEvent.BUTTON_SECONDARY)
+                            lastTapTime = 0
+                            longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
+                        } else {
+                            lastTapTime = currentTime
+                        }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    isFingerDown = false
-                    // Process any queued clicks now that the user's fingers are completely off the screen.
-                    // This prevents modifying window flags while fingers are down, eliminating freezing.
-                    if (pendingClicks.isNotEmpty()) {
-                        val clicksToInject = pendingClicks.toList()
-                        pendingClicks.clear()
-
-                        Thread {
-                            clicksToInject.forEach { button ->
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    executeClickPassthrough(button)
+                    // Cancel long press callback
+                    longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
+                    
+                    if (!isLongPressing && !isTwoFingerScroll) {
+                        // Single tap - check if it's the second tap of a double-tap
+                        val currentTime = System.currentTimeMillis()
+                        if (currentTime - lastTapTime >= DOUBLE_TAP_TIMEOUT) {
+                            // Single tap confirmed (not part of double-tap yet)
+                            // We'll wait to see if a second tap comes
+                            // If no second tap within timeout, it's a single tap = left click
+                            longPressHandler.postDelayed({
+                                if (System.currentTimeMillis() - lastTapTime >= DOUBLE_TAP_TIMEOUT) {
+                                    injectClickPassthrough(MotionEvent.BUTTON_PRIMARY)
                                 }
-                                Thread.sleep(200) // Small delay between executing queued clicks
-                            }
-                        }.start()
+                            }, DOUBLE_TAP_TIMEOUT)
+                        }
                     }
+                    
+                    activePointerId = -1
+                    isTwoFingerScroll = false
+                    isLongPressing = false
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (isTwoFingerScroll && event.pointerCount == 2) {
-                        val currentY = event.getY(0)
-                        val dy = currentY - lastY
+                        // Two-finger scrolling
+                        val currentY = (event.getY(0) + event.getY(1)) / 2
+                        val dy = currentY - scrollStartY
 
-                        // Inject scroll (scale down the pixel delta to scroll amount)
-                        if (Math.abs(dy) > 10) {
+                        // Inject scroll with smoother granularity
+                        if (Math.abs(dy) > 5) {
                             val scrollAmount = if (dy > 0) -1f else 1f
                             inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount)
-                            lastY = currentY
+                            scrollStartY = currentY
                         }
-                    } else if (event.pointerCount == 1) {
-                        val dx = event.rawX - lastX
-                        val dy = event.rawY - lastY
+                    } else if (event.pointerCount == 1 && activePointerId != -1) {
+                        // Single finger movement - move cursor
+                        val pointerIndex = event.findPointerIndex(activePointerId)
+                        if (pointerIndex != -1) {
+                            val dx = event.getRawX(pointerIndex) - lastX
+                            val dy = event.getRawY(pointerIndex) - lastY
 
-                        val sensitivity = sharedPreferences.getFloat("mouse_sensitivity", 1.5f)
+                            val sensitivity = sharedPreferences.getFloat("mouse_sensitivity", 1.5f)
 
-                        cursorX += dx * sensitivity
-                        cursorY += dy * sensitivity
+                            cursorX += dx * sensitivity
+                            cursorY += dy * sensitivity
 
-                        cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
-                        cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
+                            cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
+                            cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
 
-                        // Update visual cursor position
-                        if (::cursorView.isInitialized) {
-                            val cursorParams = cursorView.layoutParams as WindowManager.LayoutParams
-                            cursorParams.x = cursorX.toInt()
-                            cursorParams.y = cursorY.toInt()
-                            windowManager.updateViewLayout(cursorView, cursorParams)
+                            // Update visual cursor position
+                            if (::cursorView.isInitialized) {
+                                val cursorParams = cursorView.layoutParams as WindowManager.LayoutParams
+                                cursorParams.x = cursorX.toInt()
+                                cursorParams.y = cursorY.toInt()
+                                windowManager.updateViewLayout(cursorView, cursorParams)
+                            }
+
+                            inputInjector.injectMouseMove(cursorX, cursorY)
+
+                            lastX = event.getRawX(pointerIndex)
+                            lastY = event.getRawY(pointerIndex)
                         }
-
-                        inputInjector.injectMouseMove(cursorX, cursorY)
-
-                        lastX = event.rawX
-                        lastY = event.rawY
                     }
                     true
                 }
@@ -393,7 +413,10 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
     override fun onDestroy() {
         super.onDestroy()
         sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
+        // Clean up any pending callbacks
+        longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
         if (::touchpadView.isInitialized) windowManager.removeView(touchpadView)
+        if (::cursorView.isInitialized) windowManager.removeView(cursorView)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
