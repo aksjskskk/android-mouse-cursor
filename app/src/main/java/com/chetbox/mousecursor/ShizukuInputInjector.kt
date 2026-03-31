@@ -67,6 +67,8 @@ class ShizukuInputInjector(private val context: Context) {
 
         try {
             // INJECT_INPUT_EVENT_MODE_ASYNC = 0
+            // We use async injection for all events (moves, scrolls, clicks) to avoid deadlocking
+            // the main thread if the injected event targets our own app's window surface.
             injectInputEventMethod?.invoke(iInputManager, event, 0)
         } catch (e: Exception) {
             Log.e("ShizukuInputInjector", "Failed to inject event via Shizuku IInputManager: ${e.message}")
@@ -74,52 +76,106 @@ class ShizukuInputInjector(private val context: Context) {
         }
     }
 
-    fun injectClick(x: Float, y: Float, leftClick: Boolean = true) {
+    fun injectMouseMove(x: Float, y: Float) {
+        val eventTime = SystemClock.uptimeMillis()
+        val hoverEvent = MotionEvent.obtain(
+            eventTime, eventTime, MotionEvent.ACTION_HOVER_MOVE, x, y, 0
+        )
+        hoverEvent.source = InputDevice.SOURCE_MOUSE
+        injectEvent(hoverEvent)
+        hoverEvent.recycle()
+    }
+
+    fun injectMouseClick(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         val downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
 
-        // Create ACTION_DOWN event
-        val downEvent = MotionEvent.obtain(
-            downTime, eventTime, MotionEvent.ACTION_DOWN, x, y, 0
-        )
-        downEvent.source = InputDevice.SOURCE_TOUCHSCREEN
-
-        if (leftClick) {
-            // Standard Left Click
-            val upEvent = MotionEvent.obtain(
-                downTime, eventTime + 50, MotionEvent.ACTION_UP, x, y, 0
-            )
-            upEvent.source = InputDevice.SOURCE_TOUCHSCREEN
-
-            injectEvent(downEvent)
-            injectEvent(upEvent)
-
-            downEvent.recycle()
-            upEvent.recycle()
-        } else {
-            // Right Click (Long Press)
-            val longPressUpTime = eventTime + 1000 // 1 second long press
-            val upEventLong = MotionEvent.obtain(
-                downTime, longPressUpTime, MotionEvent.ACTION_UP, x, y, 0
-            )
-            upEventLong.source = InputDevice.SOURCE_TOUCHSCREEN
-
-            injectEvent(downEvent)
-
-            // We need a small delay here if we are literally injecting touch events,
-            // but the `eventTime` difference on the UP event *might* be enough for the OS
-            // to register it as a long press. To be safe, we will execute the UP event
-            // slightly delayed to match the timestamp.
-            Thread {
-                try {
-                    Thread.sleep(1000)
-                } catch (e: InterruptedException) {
-                    // Ignore
-                }
-                injectEvent(upEventLong)
-                downEvent.recycle()
-                upEventLong.recycle()
-            }.start()
+        val props = Array(1) {
+            MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_MOUSE
+            }
         }
+        val coords = Array(1) {
+            MotionEvent.PointerCoords().apply {
+                this.x = x
+                this.y = y
+                pressure = 1.0f
+                size = 1.0f
+            }
+        }
+
+        // Android Input Dispatcher expects a very specific sequence for mouse clicks:
+        // 1. ACTION_DOWN (with buttonState)
+        // 2. ACTION_BUTTON_PRESS (with actionButton)
+        // 3. ACTION_BUTTON_RELEASE (with actionButton)
+        // 4. ACTION_UP
+
+        val downEvent = MotionEvent.obtain(
+            downTime, eventTime, MotionEvent.ACTION_DOWN,
+            1, props, coords, 0, buttonState, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
+        )
+
+        val buttonPressEvent = MotionEvent.obtain(
+            downTime, eventTime + 5, MotionEvent.ACTION_BUTTON_PRESS,
+            1, props, coords, 0, buttonState, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
+        )
+
+        val buttonReleaseEvent = MotionEvent.obtain(
+            downTime, eventTime + 50, MotionEvent.ACTION_BUTTON_RELEASE,
+            1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
+        )
+
+        val upEvent = MotionEvent.obtain(
+            downTime, eventTime + 55, MotionEvent.ACTION_UP,
+            1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
+        )
+
+        // Ensure actionButton is set for API 23+ (required for right-clicks to register properly)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            try {
+                val setActionButtonMethod = MotionEvent::class.java.getDeclaredMethod("setActionButton", Int::class.javaPrimitiveType)
+                setActionButtonMethod.invoke(buttonPressEvent, buttonState)
+                setActionButtonMethod.invoke(buttonReleaseEvent, buttonState)
+            } catch (e: Exception) {
+                // Ignore if method is hidden
+            }
+        }
+
+        injectEvent(downEvent)
+        injectEvent(buttonPressEvent)
+        injectEvent(buttonReleaseEvent)
+        injectEvent(upEvent)
+
+        downEvent.recycle()
+        buttonPressEvent.recycle()
+        buttonReleaseEvent.recycle()
+        upEvent.recycle()
+    }
+
+    fun injectMouseScroll(x: Float, y: Float, scrollY: Float) {
+        val eventTime = SystemClock.uptimeMillis()
+
+        val props = Array(1) {
+            MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_MOUSE
+            }
+        }
+        val coords = Array(1) {
+            MotionEvent.PointerCoords().apply {
+                this.x = x
+                this.y = y
+                setAxisValue(MotionEvent.AXIS_VSCROLL, scrollY)
+            }
+        }
+
+        val scrollEvent = MotionEvent.obtain(
+            eventTime, eventTime, MotionEvent.ACTION_SCROLL,
+            1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
+        )
+
+        injectEvent(scrollEvent)
+        scrollEvent.recycle()
     }
 }
