@@ -86,71 +86,55 @@ class ShizukuInputInjector(private val context: Context) {
         hoverEvent.recycle()
     }
 
-    fun injectMouseClick(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
+    fun injectMouseDown(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         val downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
 
-        val props = Array(1) {
-            MotionEvent.PointerProperties().apply {
-                id = 0
-                toolType = MotionEvent.TOOL_TYPE_MOUSE
-            }
-        }
-        val coords = Array(1) {
-            MotionEvent.PointerCoords().apply {
-                this.x = x
-                this.y = y
-                pressure = 1.0f
-                size = 1.0f
-            }
-        }
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+        val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
 
-        // Android Input Dispatcher expects a very specific sequence for mouse clicks:
-        // 1. ACTION_DOWN (with buttonState)
-        // 2. ACTION_BUTTON_PRESS (with actionButton)
-        // 3. ACTION_BUTTON_RELEASE (with actionButton)
-        // 4. ACTION_UP
+        val downEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, 1, props, coords, 0, buttonState, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+        val buttonPressEvent = MotionEvent.obtain(downTime, eventTime + 5, MotionEvent.ACTION_BUTTON_PRESS, 1, props, coords, 0, buttonState, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
 
-        val downEvent = MotionEvent.obtain(
-            downTime, eventTime, MotionEvent.ACTION_DOWN,
-            1, props, coords, 0, buttonState, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
-        )
-
-        val buttonPressEvent = MotionEvent.obtain(
-            downTime, eventTime + 5, MotionEvent.ACTION_BUTTON_PRESS,
-            1, props, coords, 0, buttonState, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
-        )
-
-        val buttonReleaseEvent = MotionEvent.obtain(
-            downTime, eventTime + 50, MotionEvent.ACTION_BUTTON_RELEASE,
-            1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
-        )
-
-        val upEvent = MotionEvent.obtain(
-            downTime, eventTime + 55, MotionEvent.ACTION_UP,
-            1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
-        )
-
-        // Ensure actionButton is set for API 23+ (required for right-clicks to register properly)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
             try {
                 val setActionButtonMethod = MotionEvent::class.java.getDeclaredMethod("setActionButton", Int::class.javaPrimitiveType)
                 setActionButtonMethod.invoke(buttonPressEvent, buttonState)
-                setActionButtonMethod.invoke(buttonReleaseEvent, buttonState)
-            } catch (e: Exception) {
-                // Ignore if method is hidden
-            }
+            } catch (e: Exception) {}
         }
 
         injectEvent(downEvent)
         injectEvent(buttonPressEvent)
-        injectEvent(buttonReleaseEvent)
-        injectEvent(upEvent)
-
         downEvent.recycle()
         buttonPressEvent.recycle()
+    }
+
+    fun injectMouseUp(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
+        val downTime = SystemClock.uptimeMillis()
+        val eventTime = SystemClock.uptimeMillis()
+
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+        val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
+
+        val buttonReleaseEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_BUTTON_RELEASE, 1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+        val upEvent = MotionEvent.obtain(downTime, eventTime + 5, MotionEvent.ACTION_UP, 1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            try {
+                val setActionButtonMethod = MotionEvent::class.java.getDeclaredMethod("setActionButton", Int::class.javaPrimitiveType)
+                setActionButtonMethod.invoke(buttonReleaseEvent, buttonState)
+            } catch (e: Exception) {}
+        }
+
+        injectEvent(buttonReleaseEvent)
+        injectEvent(upEvent)
         buttonReleaseEvent.recycle()
         upEvent.recycle()
+    }
+
+    fun injectMouseClick(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
+        injectMouseDown(x, y, buttonState)
+        injectMouseUp(x, y, buttonState)
     }
 
     fun injectMouseScroll(x: Float, y: Float, scrollY: Float) {

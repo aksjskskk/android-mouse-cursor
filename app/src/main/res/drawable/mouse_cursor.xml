@@ -1,20 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="48dp"
-    android:height="48dp"
-    android:viewportWidth="48"
-    android:viewportHeight="48">
-    <!-- Stable high-contrast mouse cursor with drop shadow -->
-    <!-- Drop Shadow -->
-    <path
-        android:fillColor="#40000000"
-        android:pathData="M 10.5 3.5 L 36.5 29.5 L 25.5 29.5 L 30.5 41.5 L 24.5 44.5 L 19.5 32.5 L 10.5 41.5 Z" />
-    <!-- Black Outline for contrast -->
+    android:width="24dp"
+    android:height="36dp"
+    android:viewportWidth="24"
+    android:viewportHeight="36">
+    <!-- Stable, classic macOS/Windows style cursor -->
+
+    <!-- Outer Black Border for contrast -->
     <path
         android:fillColor="#000000"
-        android:pathData="M 9.5 2.5 L 35.5 28.5 L 24.5 28.5 L 29.5 40.5 L 23.5 43.5 L 18.5 31.5 L 9.5 40.5 Z" />
-    <!-- Solid White Fill for visibility -->
+        android:pathData="M2,2 L18,17 L12,18 L16,26 L13,27 L9,19 L3,24 Z" />
+
+    <!-- Inner White Fill -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M 10 4 L 33 27 L 24 27 L 28 38 L 23 41 L 19 30 L 10 39 Z" />
+        android:pathData="M4,5 L14,15 L10,16 L14,24 L12,25 L8,17 L4,21 Z" />
 </vector>
