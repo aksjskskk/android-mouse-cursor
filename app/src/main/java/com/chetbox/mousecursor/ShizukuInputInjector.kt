@@ -14,6 +14,14 @@ import java.lang.reflect.Method
 
 class ShizukuInputInjector(private val context: Context) {
 
+    // --- NATIVE IINPUTMANAGER REFLECTION INJECTION --- //
+    // The previous implementation used `sh -c input tap` which is extremely reliable but lacks
+    // precise control for continuous dragging (like double-tap-to-drag), because `input swipe`
+    // does not allow dynamic coordinate updates.
+    //
+    // Here we restore the powerful `IInputManager` reflection method via `ShizukuBinderWrapper`,
+    // but correctly apply `INJECT_INPUT_EVENT_MODE_ASYNC` to avoid the deadlocks we experienced earlier.
+
     private var iInputManager: Any? = null
     private var injectInputEventMethod: Method? = null
 

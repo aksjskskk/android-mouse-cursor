@@ -92,7 +92,6 @@ fun MainScreen(
     var sizeMultiplier by remember { mutableStateOf(sharedPreferences.getFloat("touchpad_size", 1.0f)) }
     var cursorSizeMultiplier by remember { mutableStateOf(sharedPreferences.getFloat("cursor_size", 1.0f)) }
     var sensitivity by remember { mutableStateOf(sharedPreferences.getFloat("mouse_sensitivity", 1.5f)) }
-    var fullScreenMode by remember { mutableStateOf(sharedPreferences.getBoolean("full_screen_mode", false)) }
 
     Column(
         modifier = Modifier
@@ -131,20 +130,6 @@ fun MainScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Full Screen Invisible Mode")
-            Spacer(modifier = Modifier.width(16.dp))
-            Switch(
-                checked = fullScreenMode,
-                onCheckedChange = {
-                    fullScreenMode = it
-                    sharedPreferences.edit().putBoolean("full_screen_mode", it).apply()
-                }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
         Text("Touchpad Transparency")
         Slider(
             value = alpha,
@@ -152,8 +137,7 @@ fun MainScreen(
                 alpha = it
                 sharedPreferences.edit().putFloat("touchpad_alpha", it).apply()
             },
-            valueRange = 0f..1f,
-            enabled = !fullScreenMode
+            valueRange = 0f..1f
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -165,8 +149,7 @@ fun MainScreen(
                 sizeMultiplier = it
                 sharedPreferences.edit().putFloat("touchpad_size", it).apply()
             },
-            valueRange = 0.5f..2.0f,
-            enabled = !fullScreenMode
+            valueRange = 0.5f..3.0f
         )
 
         Spacer(modifier = Modifier.height(16.dp))

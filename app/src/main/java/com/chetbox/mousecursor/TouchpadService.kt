@@ -141,124 +141,60 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         return START_STICKY
     }
 
-    // Queue to hold clicks that occur while the user is still touching the screen.
-    // Toggling window flags while a finger is down breaks the active gesture, causing a freeze.
-    private val pendingClicks = mutableListOf<Int>()
-    private var isFingerDown = false
     private var isDragging = false
 
-    private fun injectClickPassthrough(buttonState: Int) {
-        if (isFingerDown) {
-            // Defer the click until the user completely lifts all fingers (ACTION_UP)
-            pendingClicks.add(buttonState)
-            return
-        }
-
-        executeClickPassthrough(buttonState)
-    }
-
-    private fun executeClickPassthrough(buttonState: Int) {
-        if (!::touchpadView.isInitialized) return
-
-        // To allow the native hardware mouse click to actually hit the apps underneath our
-        // full-screen transparent touchpad, we must momentarily make our overlay NOT_TOUCHABLE.
-        val params = touchpadView.layoutParams as WindowManager.LayoutParams
-        val originalFlags = params.flags
-
-        params.flags = originalFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        windowManager.updateViewLayout(touchpadView, params)
-
-        // Inject the native system mouse click while the window is completely transparent to touches
-        Thread {
-            // Wait for WindowManager to fully apply the FLAG_NOT_TOUCHABLE flag
-            // before we inject the click, otherwise the click will instantly hit our own overlay!
-            Thread.sleep(30)
-
-            inputInjector.injectMouseClick(cursorX, cursorY, buttonState)
-
-            // Because we are using ASYNC injection, we must sleep just long enough to let the
-            // Android OS input dispatcher route the click to the background app before we
-            // restore the touchpad's touchability.
-            Thread.sleep(50)
-
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                if (::touchpadView.isInitialized) {
-                    params.flags = originalFlags
-                    windowManager.updateViewLayout(touchpadView, params)
-                }
-            }
-        }.start()
-    }
-
     private fun setupTouchpad() {
-        val fullScreenMode = sharedPreferences.getBoolean("full_screen_mode", false)
         val touchpadAlpha = sharedPreferences.getFloat("touchpad_alpha", 0.5f)
         val sizeMultiplier = sharedPreferences.getFloat("touchpad_size", 1.0f)
 
         touchpadView = FrameLayout(this).apply {
-            if (fullScreenMode) {
-                // Use a practically invisible color (#01000000) so it still intercepts touches
-                // A full 0f alpha or completely transparent color sometimes causes Android to pass touches through
-                setBackgroundColor(0x01000000)
-            } else {
-                setBackgroundResource(R.drawable.touchpad_bg)
-                alpha = touchpadAlpha
-            }
+            setBackgroundResource(R.drawable.touchpad_bg)
+            alpha = touchpadAlpha
         }
 
-        // Add a drag handle if not fullscreen
-        if (!fullScreenMode) {
-            val handle = View(this).apply {
-                setBackgroundColor(0x88000000.toInt())
-            }
-            val handleParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, 40
-            ).apply {
-                gravity = Gravity.TOP
-            }
-            (touchpadView as FrameLayout).addView(handle, handleParams)
+        // Add a drag handle to allow the user to move the trackpad around the screen
+        val handle = View(this).apply {
+            setBackgroundColor(0x88000000.toInt())
+        }
+        val handleParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, 40
+        ).apply {
+            gravity = Gravity.TOP
+        }
+        (touchpadView as FrameLayout).addView(handle, handleParams)
 
-            handle.setOnTouchListener { _, event ->
-                val params = touchpadView.layoutParams as WindowManager.LayoutParams
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        initialX = params.x
-                        initialY = params.y
-                        initialTouchX = event.rawX
-                        initialTouchY = event.rawY
-                        true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        params.x = initialX + (event.rawX - initialTouchX).toInt()
-                        params.y = initialY + (event.rawY - initialTouchY).toInt()
-                        windowManager.updateViewLayout(touchpadView, params)
-                        true
-                    }
-                    else -> false
+        handle.setOnTouchListener { _, event ->
+            val params = touchpadView.layoutParams as WindowManager.LayoutParams
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x
+                    initialY = params.y
+                    initialTouchX = event.rawX
+                    initialTouchY = event.rawY
+                    true
                 }
+                MotionEvent.ACTION_MOVE -> {
+                    params.x = initialX + (event.rawX - initialTouchX).toInt()
+                    params.y = initialY + (event.rawY - initialTouchY).toInt()
+                    windowManager.updateViewLayout(touchpadView, params)
+                    true
+                }
+                else -> false
             }
         }
 
         val displayMetrics = DisplayMetrics()
         windowManager.defaultDisplay.getMetrics(displayMetrics)
 
-        val width = if (fullScreenMode) WindowManager.LayoutParams.MATCH_PARENT else (400 * sizeMultiplier).toInt()
-        val height = if (fullScreenMode) WindowManager.LayoutParams.MATCH_PARENT else (400 * sizeMultiplier).toInt()
+        val width = (400 * sizeMultiplier).toInt()
+        val height = (400 * sizeMultiplier).toInt()
 
         // FLAG_NOT_TOUCH_MODAL ensures that native mouse clicks injected through Shizuku
-        // that fall outside our transparent bounding box (when not in full screen) hit the app underneath.
-        // When in full screen, we must intercept ALL touches to map them to the mouse, but we explicitly
-        // ignore our own injected SOURCE_MOUSE events (handled in the onTouchListener).
-        // Since we are using the native hardware mouse injection, the Android window manager will bypass
-        // our TYPE_APPLICATION_OVERLAY window for hardware mouse clicks if we set FLAG_NOT_TOUCHABLE.
-        // However, we want to intercept finger touches. The window manager prioritizes the front-most
-        // touchable window. The native hardware mouse injection (SOURCE_MOUSE) is handled deeper in the
-        // stack. But wait, if our transparent window covers the entire screen, won't it intercept the
-        // SOURCE_MOUSE clicks too?
-        // Yes, but we filter them out by returning `false` for SOURCE_MOUSE events in `onTouchListener`.
-        // This tells the window manager to pass the mouse event down to the window below!
-        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                if (fullScreenMode) WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN else 0
+        // that fall outside our transparent bounding box hit the background apps underneath.
+        // Because the user controls a floating window trackpad, the cursor is almost always
+        // outside the bounds of the trackpad, ensuring clicks pass through 100% reliably
+        // without any hacky window flag toggling or sleep delays.
+        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
 
         val params = WindowManager.LayoutParams(
             width,
@@ -270,13 +206,13 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             flags,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = if (fullScreenMode) Gravity.FILL else Gravity.CENTER
+            gravity = Gravity.CENTER
         }
 
         var isDragging = false
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                injectClickPassthrough(MotionEvent.BUTTON_PRIMARY)
+                Thread { inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY) }.start()
                 return true
             }
 
@@ -318,14 +254,12 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    isFingerDown = true
                     lastX = event.rawX
                     lastY = event.rawY
                     isTwoFingerScroll = false
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
-                    isFingerDown = true
                     if (event.pointerCount == 2) {
                         isTwoFingerScroll = true
                         lastY = event.getY(0) // Track vertical movement of the first finger for scrolling
@@ -335,31 +269,14 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 MotionEvent.ACTION_POINTER_UP -> {
                     if (event.pointerCount == 3) {
                         // 3-finger tap for right click
-                        injectClickPassthrough(MotionEvent.BUTTON_SECONDARY)
+                        Thread { inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY) }.start()
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    isFingerDown = false
                     if (isDragging) {
                         isDragging = false
                         Thread { inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY) }.start()
-                    }
-
-                    // Process any queued clicks now that the user's fingers are completely off the screen.
-                    // This prevents modifying window flags while fingers are down, eliminating freezing.
-                    if (pendingClicks.isNotEmpty()) {
-                        val clicksToInject = pendingClicks.toList()
-                        pendingClicks.clear()
-
-                        Thread {
-                            clicksToInject.forEach { button ->
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    executeClickPassthrough(button)
-                                }
-                                Thread.sleep(200) // Small delay between executing queued clicks
-                            }
-                        }.start()
                     }
                     true
                 }
@@ -372,23 +289,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         if (Math.abs(dy) > 10) {
                             val scrollAmount = if (dy > 0) -1f else 1f
 
-                            // Momentarily disable touchpad so scroll hits the background app
-                            val params = touchpadView.layoutParams as WindowManager.LayoutParams
-                            val originalFlags = params.flags
-                            params.flags = originalFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            windowManager.updateViewLayout(touchpadView, params)
-
-                            Thread {
-                                Thread.sleep(10) // Wait for flags to apply
-                                inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount)
-                                Thread.sleep(20)
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    if (::touchpadView.isInitialized) {
-                                        params.flags = originalFlags
-                                        windowManager.updateViewLayout(touchpadView, params)
-                                    }
-                                }
-                            }.start()
+                            // Inject scroll naturally. If it falls outside the floating window bounds,
+                            // it will hit the background app natively without any window flag hacks.
+                            Thread { inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount) }.start()
 
                             lastY = currentY
                         }
