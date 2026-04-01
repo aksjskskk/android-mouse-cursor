@@ -170,12 +170,16 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
         // Inject the native system mouse click while the window is completely transparent to touches
         Thread {
+            // Wait for WindowManager to fully apply the FLAG_NOT_TOUCHABLE flag
+            // before we inject the click, otherwise the click will instantly hit our own overlay!
+            Thread.sleep(30)
+
             inputInjector.injectMouseClick(cursorX, cursorY, buttonState)
 
             // Because we are using ASYNC injection, we must sleep just long enough to let the
             // Android OS input dispatcher route the click to the background app before we
             // restore the touchpad's touchability.
-            Thread.sleep(100)
+            Thread.sleep(50)
 
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 if (::touchpadView.isInitialized) {
@@ -367,7 +371,25 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         // Inject scroll (scale down the pixel delta to scroll amount)
                         if (Math.abs(dy) > 10) {
                             val scrollAmount = if (dy > 0) -1f else 1f
-                            inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount)
+
+                            // Momentarily disable touchpad so scroll hits the background app
+                            val params = touchpadView.layoutParams as WindowManager.LayoutParams
+                            val originalFlags = params.flags
+                            params.flags = originalFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                            windowManager.updateViewLayout(touchpadView, params)
+
+                            Thread {
+                                Thread.sleep(10) // Wait for flags to apply
+                                inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount)
+                                Thread.sleep(20)
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    if (::touchpadView.isInitialized) {
+                                        params.flags = originalFlags
+                                        windowManager.updateViewLayout(touchpadView, params)
+                                    }
+                                }
+                            }.start()
+
                             lastY = currentY
                         }
                     } else if (event.pointerCount == 1) {

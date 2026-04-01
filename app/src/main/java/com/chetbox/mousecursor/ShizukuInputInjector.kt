@@ -87,6 +87,9 @@ class ShizukuInputInjector(private val context: Context) {
     }
 
     fun injectMouseDown(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
+        // Important: When starting a drag, we also need to sync the OS cursor position
+        injectMouseMove(x, y)
+
         val downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
 
@@ -133,11 +136,17 @@ class ShizukuInputInjector(private val context: Context) {
     }
 
     fun injectMouseClick(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
+        // Sync the hardware cursor location right before clicking,
+        // as we no longer constantly inject hover moves to save performance!
+        injectMouseMove(x, y)
         injectMouseDown(x, y, buttonState)
         injectMouseUp(x, y, buttonState)
     }
 
     fun injectMouseScroll(x: Float, y: Float, scrollY: Float) {
+        // Sync hardware pointer
+        injectMouseMove(x, y)
+
         val eventTime = SystemClock.uptimeMillis()
 
         val props = Array(1) {
