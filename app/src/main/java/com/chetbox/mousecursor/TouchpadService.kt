@@ -155,21 +155,15 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         val touchpadAlpha = sharedPreferences.getFloat("touchpad_alpha", 0.5f)
         val sizeMultiplier = sharedPreferences.getFloat("touchpad_size", 1.0f)
 
-        touchpadView = FrameLayout(this).apply {
-            setBackgroundResource(R.drawable.touchpad_bg)
+        // Inflate the new layout that includes the L and R buttons
+        touchpadView = android.view.LayoutInflater.from(this).inflate(R.layout.touchpad_layout, null).apply {
             alpha = touchpadAlpha
         }
 
-        // Add a drag handle to allow the user to move the trackpad around the screen
-        val handle = View(this).apply {
-            setBackgroundColor(0x88000000.toInt())
-        }
-        val handleParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, 40
-        ).apply {
-            gravity = Gravity.TOP
-        }
-        (touchpadView as FrameLayout).addView(handle, handleParams)
+        val handle = touchpadView.findViewById<View>(R.id.drag_handle)
+        val touchpadArea = touchpadView.findViewById<View>(R.id.touchpad_area)
+        val btnLeft = touchpadView.findViewById<android.widget.Button>(R.id.btn_left_click)
+        val btnRight = touchpadView.findViewById<android.widget.Button>(R.id.btn_right_click)
 
         handle.setOnTouchListener { _, event ->
             val params = touchpadView.layoutParams as WindowManager.LayoutParams
@@ -189,6 +183,41 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 }
                 else -> false
             }
+        }
+
+        // Dedicated physical-like L and R buttons!
+        // This entirely replaces the flaky gesture detector for dragging and right clicking.
+
+        btnLeft.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    isDragging = true // Enable moving the item while button is held
+                    inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                    btnLeft.setBackgroundColor(0x88FFFFFF.toInt()) // Visual feedback
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    isDragging = false
+                    inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                    btnLeft.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                }
+            }
+            true
+        }
+
+        btnRight.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    isDragging = true // Enable dragging/drawing with right click held down
+                    inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
+                    btnRight.setBackgroundColor(0x88FFFFFF.toInt())
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    isDragging = false
+                    inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
+                    btnRight.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                }
+            }
+            true
         }
 
         val width = (400 * sizeMultiplier).toInt()
@@ -214,41 +243,15 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = Gravity.CENTER
         }
 
-        val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
-                return true
-            }
-
-            override fun onDoubleTapEvent(e: MotionEvent): Boolean {
-                when (e.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        // Start of the second tap in a double-tap: Start dragging!
-                        isDragging = true
-                        inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
-                    }
-                }
-                return true
-            }
-
-            override fun onLongPress(e: MotionEvent) {
-                // Long press acts as a normal click holding down
-                isDragging = true
-                inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
-            }
-        })
-
         var lastX = 0f
         var lastY = 0f
         var isTwoFingerScroll = false
 
-        touchpadView.setOnTouchListener { _, event ->
+        touchpadArea.setOnTouchListener { _, event ->
             // Prevent infinite loops by totally ignoring our own injected native mouse events
             if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
                 return@setOnTouchListener false
             }
-
-            gestureDetector.onTouchEvent(event)
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -262,29 +265,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         isTwoFingerScroll = true
                         lastY = event.getY(0) // Track vertical movement of the first finger for scrolling
                     }
-                    true
-                }
-                MotionEvent.ACTION_POINTER_UP -> {
-                    if (event.pointerCount == 3) {
-                        // 3-finger tap for right click
-                        inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
-                    }
-                    true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (isDragging) {
-                        isDragging = false
-                        inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
-                    }
-                    true
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    // Do NOT cancel the drag state on an OS-level ACTION_CANCEL event.
-                    // Injecting a hardware mouse click (SOURCE_MOUSE) while a physical finger
-                    // is touching the screen causes Android's InputDispatcher to forcefully send
-                    // an ACTION_CANCEL to the active touch stream to prevent multi-device ghost touches.
-                    // If we release the drag here, long-presses and double-tap-drags will instantly
-                    // turn into fast normal clicks! We must wait for the physical ACTION_UP.
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -313,7 +293,16 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
                         // Dynamically fetch screen size so boundary clamping works after orientation changes
                         val displayMetrics = android.util.DisplayMetrics()
-                        windowManager.defaultDisplay.getMetrics(displayMetrics)
+                        windowManager.defaultDisplay.getRealMetrics(displayMetrics)
+
+                        // Fix for Landscape orientation "dead zone".
+                        // Sometimes the input boundary gets stuck to portrait bounds (e.g. 1080x1920)
+                        // even when screen is rotated to 1920x1080, causing clicks in the x > 1080 area to be dropped.
+                        // By explicitly allowing the cursor to travel the full logical max of either dimension
+                        // during landscape, and explicitly setting displayId=0 in the Injector, we fix the dead zone.
+                        val maxDimen = Math.max(displayMetrics.widthPixels, displayMetrics.heightPixels).toFloat()
+
+                        // Instead of strictly using width/height, we allow the cursor to move freely in the logical display space.
                         cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
                         cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
 

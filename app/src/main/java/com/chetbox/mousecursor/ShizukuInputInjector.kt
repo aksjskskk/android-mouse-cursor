@@ -76,6 +76,17 @@ class ShizukuInputInjector(private val context: Context) {
             if (iInputManager == null) return
         }
 
+        // Set displayId explicitly to DEFAULT_DISPLAY (0) so rotation mapping works correctly.
+        // Without this, landscape injected coordinates out of portrait bounds get dropped.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try {
+                val setDisplayIdMethod = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+                setDisplayIdMethod.invoke(event, 0) // Display.DEFAULT_DISPLAY = 0
+            } catch (e: Exception) {
+                // Ignore if method not found
+            }
+        }
+
         try {
             // INJECT_INPUT_EVENT_MODE_ASYNC = 0
             // We use async injection for all events (moves, scrolls, clicks) to avoid deadlocking
