@@ -8,9 +8,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.os.Build
 import android.os.IBinder
-import android.util.DisplayMetrics
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -39,6 +39,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
     private lateinit var inputInjector: ShizukuInputInjector
 
     private val CHANNEL_ID = "TouchpadServiceChannel"
+    private val dragHandleHeightPx = 40
 
     override fun onCreate() {
         super.onCreate()
@@ -157,7 +158,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             setBackgroundColor(0x88000000.toInt())
         }
         val handleParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, 40
+            FrameLayout.LayoutParams.MATCH_PARENT, dragHandleHeightPx
         ).apply {
             gravity = Gravity.TOP
         }
@@ -191,7 +192,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         // Because the user controls a floating window trackpad, the cursor is almost always
         // outside the bounds of the trackpad, ensuring clicks pass through 100% reliably
         // without any hacky window flag toggling or sleep delays.
-        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        val flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
 
         val params = WindowManager.LayoutParams(
             width,
@@ -206,8 +208,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = Gravity.CENTER
         }
 
-        var isDragging = false
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent): Boolean = true
+
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                 return true
@@ -246,7 +249,10 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 return@setOnTouchListener false
             }
 
-            gestureDetector.onTouchEvent(event)
+            val touchedHandle = event.y <= dragHandleHeightPx
+            if (!touchedHandle) {
+                gestureDetector.onTouchEvent(event)
+            }
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -277,6 +283,11 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    if (touchedHandle) {
+                        lastX = event.rawX
+                        lastY = event.rawY
+                        return@setOnTouchListener true
+                    }
                     if (isTwoFingerScroll && event.pointerCount == 2) {
                         val currentY = event.getY(0)
                         val dy = currentY - lastY
@@ -301,10 +312,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         cursorY += dy * sensitivity
 
                         // Dynamically fetch screen size so boundary clamping works after orientation changes
-                        val displayMetrics = android.util.DisplayMetrics()
-                        windowManager.defaultDisplay.getMetrics(displayMetrics)
-                        cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
-                        cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
+                        val (screenWidth, screenHeight) = getScreenSizePx()
+                        cursorX = cursorX.coerceIn(0f, screenWidth.toFloat())
+                        cursorY = cursorY.coerceIn(0f, screenHeight.toFloat())
 
                         // Update visual cursor position
                         if (::cursorView.isInitialized) {
@@ -357,4 +367,16 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun getScreenSizePx(): Pair<Int, Int> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.currentWindowMetrics.bounds
+            Pair(bounds.width(), bounds.height())
+        } else {
+            val size = Point()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealSize(size)
+            Pair(size.x, size.y)
+        }
+    }
 }
