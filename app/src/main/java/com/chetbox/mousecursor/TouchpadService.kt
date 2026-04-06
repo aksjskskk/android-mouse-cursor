@@ -183,9 +183,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             }
         }
 
-        val displayMetrics = DisplayMetrics()
-        windowManager.defaultDisplay.getMetrics(displayMetrics)
-
         val width = (400 * sizeMultiplier).toInt()
         val height = (400 * sizeMultiplier).toInt()
 
@@ -285,12 +282,12 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         val currentY = event.getY(0)
                         val dy = currentY - lastY
 
-                        // Inject scroll (scale down the pixel delta to scroll amount)
+                        // Optimize scroll speed: inject proportional scroll values based on distance swiped
                         if (Math.abs(dy) > 10) {
-                            val scrollAmount = if (dy > 0) -1f else 1f
+                            val scrollAmount = (dy / -20f) // negative is up, positive is down, adjust divisor for speed
 
-                            // Inject scroll naturally. If it falls outside the floating window bounds,
-                            // it will hit the background app natively without any window flag hacks.
+                            // Inject scroll natively. Since we are using IInputManager reflection,
+                            // this happens instantly and smoothly!
                             Thread { inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount) }.start()
 
                             lastY = currentY
@@ -304,6 +301,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         cursorX += dx * sensitivity
                         cursorY += dy * sensitivity
 
+                        // Dynamically fetch screen size so boundary clamping works after orientation changes
+                        val displayMetrics = android.util.DisplayMetrics()
+                        windowManager.defaultDisplay.getMetrics(displayMetrics)
                         cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
                         cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
 

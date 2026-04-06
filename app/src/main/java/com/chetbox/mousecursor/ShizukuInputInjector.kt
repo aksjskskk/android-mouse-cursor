@@ -25,6 +25,9 @@ class ShizukuInputInjector(private val context: Context) {
     private var iInputManager: Any? = null
     private var injectInputEventMethod: Method? = null
 
+    // We maintain a consistent event timeline for drags/holds
+    private var downTime: Long = 0L
+
     init {
         setupIInputManager()
     }
@@ -86,19 +89,30 @@ class ShizukuInputInjector(private val context: Context) {
 
     fun injectMouseMove(x: Float, y: Float) {
         val eventTime = SystemClock.uptimeMillis()
-        val hoverEvent = MotionEvent.obtain(
-            eventTime, eventTime, MotionEvent.ACTION_HOVER_MOVE, x, y, 0
-        )
-        hoverEvent.source = InputDevice.SOURCE_MOUSE
-        injectEvent(hoverEvent)
-        hoverEvent.recycle()
+
+        // If a finger is currently holding down a drag, we inject ACTION_MOVE to pull the item.
+        if (downTime > 0) {
+            val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+            val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
+
+            val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, props, coords, 0, MotionEvent.BUTTON_PRIMARY, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0)
+            injectEvent(moveEvent)
+            moveEvent.recycle()
+        } else {
+            val hoverEvent = MotionEvent.obtain(
+                eventTime, eventTime, MotionEvent.ACTION_HOVER_MOVE, x, y, 0
+            )
+            hoverEvent.source = InputDevice.SOURCE_MOUSE
+            injectEvent(hoverEvent)
+            hoverEvent.recycle()
+        }
     }
 
     fun injectMouseDown(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         // Important: When starting a drag, we also need to sync the OS cursor position
         injectMouseMove(x, y)
 
-        val downTime = SystemClock.uptimeMillis()
+        downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
 
         val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
@@ -121,7 +135,7 @@ class ShizukuInputInjector(private val context: Context) {
     }
 
     fun injectMouseUp(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
-        val downTime = SystemClock.uptimeMillis()
+        if (downTime == 0L) downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
 
         val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
@@ -141,6 +155,8 @@ class ShizukuInputInjector(private val context: Context) {
         injectEvent(upEvent)
         buttonReleaseEvent.recycle()
         upEvent.recycle()
+
+        downTime = 0L // Reset drag state
     }
 
     fun injectMouseClick(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
