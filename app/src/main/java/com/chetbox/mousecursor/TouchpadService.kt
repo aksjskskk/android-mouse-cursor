@@ -151,6 +151,37 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
     private var isDragging = false
 
+    private val displayMetrics = android.util.DisplayMetrics()
+
+    // Extracts the dx/dy pointer tracking logic so both the touchpad area AND the buttons
+    // can move the cursor. This fixes the issue where holding a button stops cursor movement.
+    private fun updateCursorPosition(dx: Float, dy: Float) {
+        val sensitivity = sharedPreferences.getFloat("mouse_sensitivity", 1.5f)
+
+        cursorX += dx * sensitivity
+        cursorY += dy * sensitivity
+
+        // Dynamically fetch screen size so boundary clamping works after orientation changes
+        windowManager.defaultDisplay.getRealMetrics(displayMetrics)
+
+        // Allow the cursor to move freely in the logical display space.
+        cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
+        cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
+
+        // Update visual cursor position
+        if (::cursorView.isInitialized) {
+            val cursorParams = cursorView.layoutParams as WindowManager.LayoutParams
+            cursorParams.x = cursorX.toInt()
+            cursorParams.y = cursorY.toInt()
+            windowManager.updateViewLayout(cursorView, cursorParams)
+        }
+
+        // If the user is dragging, inject movement so the OS knows where the item is going.
+        if (isDragging) {
+            inputInjector.injectMouseMove(cursorX, cursorY)
+        }
+    }
+
     private fun setupTouchpad() {
         val touchpadAlpha = sharedPreferences.getFloat("touchpad_alpha", 0.5f)
         val sizeMultiplier = sharedPreferences.getFloat("touchpad_size", 1.0f)
@@ -188,12 +219,24 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         // Dedicated physical-like L and R buttons!
         // This entirely replaces the flaky gesture detector for dragging and right clicking.
 
+        var btnLastX = 0f
+        var btnLastY = 0f
+
         btnLeft.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                     isDragging = true // Enable moving the item while button is held
                     inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     btnLeft.setBackgroundColor(0x88FFFFFF.toInt()) // Visual feedback
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - btnLastX
+                    val dy = event.rawY - btnLastY
+                    updateCursorPosition(dx, dy)
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -207,9 +250,18 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         btnRight.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                     isDragging = true // Enable dragging/drawing with right click held down
                     inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
                     btnRight.setBackgroundColor(0x88FFFFFF.toInt())
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - btnLastX
+                    val dy = event.rawY - btnLastY
+                    updateCursorPosition(dx, dy)
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -246,6 +298,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         var lastX = 0f
         var lastY = 0f
         var isTwoFingerScroll = false
+        var touchpadDownTime = 0L
+        var totalMoveX = 0f
+        var totalMoveY = 0f
 
         touchpadArea.setOnTouchListener { _, event ->
             // Prevent infinite loops by totally ignoring our own injected native mouse events
@@ -257,6 +312,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 MotionEvent.ACTION_DOWN -> {
                     lastX = event.rawX
                     lastY = event.rawY
+                    touchpadDownTime = System.currentTimeMillis()
+                    totalMoveX = 0f
+                    totalMoveY = 0f
                     isTwoFingerScroll = false
                     true
                 }
@@ -286,40 +344,10 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         val dx = event.rawX - lastX
                         val dy = event.rawY - lastY
 
-                        val sensitivity = sharedPreferences.getFloat("mouse_sensitivity", 1.5f)
+                        totalMoveX += Math.abs(dx)
+                        totalMoveY += Math.abs(dy)
 
-                        cursorX += dx * sensitivity
-                        cursorY += dy * sensitivity
-
-                        // Dynamically fetch screen size so boundary clamping works after orientation changes
-                        val displayMetrics = android.util.DisplayMetrics()
-                        windowManager.defaultDisplay.getRealMetrics(displayMetrics)
-
-                        // Fix for Landscape orientation "dead zone".
-                        // Sometimes the input boundary gets stuck to portrait bounds (e.g. 1080x1920)
-                        // even when screen is rotated to 1920x1080, causing clicks in the x > 1080 area to be dropped.
-                        // By explicitly allowing the cursor to travel the full logical max of either dimension
-                        // during landscape, and explicitly setting displayId=0 in the Injector, we fix the dead zone.
-                        val maxDimen = Math.max(displayMetrics.widthPixels, displayMetrics.heightPixels).toFloat()
-
-                        // Instead of strictly using width/height, we allow the cursor to move freely in the logical display space.
-                        cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
-                        cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
-
-                        // Update visual cursor position
-                        if (::cursorView.isInitialized) {
-                            val cursorParams = cursorView.layoutParams as WindowManager.LayoutParams
-                            cursorParams.x = cursorX.toInt()
-                            cursorParams.y = cursorY.toInt()
-                            windowManager.updateViewLayout(cursorView, cursorParams)
-                        }
-
-                        // If the user is double-tap dragging, we MUST inject the movement so the
-                        // Android system knows where they are dragging the item.
-                        // However, we throttle it slightly so we don't choke the Shizuku IPC binder.
-                        if (isDragging) {
-                            inputInjector.injectMouseMove(cursorX, cursorY)
-                        }
+                        updateCursorPosition(dx, dy)
 
                         // NOTE: If they are NOT dragging, we purposely DO NOT inject ACTION_HOVER_MOVE
                         // through Shizuku 120 times a second. Doing so causes massive IPC binder lag,
@@ -328,6 +356,14 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
                         lastX = event.rawX
                         lastY = event.rawY
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    // Detect a quick tap to simulate a normal left click without using the L button
+                    val timeHeld = System.currentTimeMillis() - touchpadDownTime
+                    if (timeHeld < 200 && totalMoveX < 15f && totalMoveY < 15f) {
+                        inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     }
                     true
                 }

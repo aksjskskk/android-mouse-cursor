@@ -24,12 +24,21 @@ class ShizukuInputInjector(private val context: Context) {
 
     private var iInputManager: Any? = null
     private var injectInputEventMethod: Method? = null
+    private var setDisplayIdMethod: Method? = null
 
     // We maintain a consistent event timeline for drags/holds
     private var downTime: Long = 0L
 
     init {
         setupIInputManager()
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try {
+                setDisplayIdMethod = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+            } catch (e: Exception) {
+                // Ignore if method not found
+            }
+        }
     }
 
     private fun setupIInputManager() {
@@ -80,10 +89,9 @@ class ShizukuInputInjector(private val context: Context) {
         // Without this, landscape injected coordinates out of portrait bounds get dropped.
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             try {
-                val setDisplayIdMethod = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-                setDisplayIdMethod.invoke(event, 0) // Display.DEFAULT_DISPLAY = 0
+                setDisplayIdMethod?.invoke(event, 0) // Display.DEFAULT_DISPLAY = 0
             } catch (e: Exception) {
-                // Ignore if method not found
+                // Ignore
             }
         }
 
