@@ -209,7 +209,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         var isDragging = false
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                Thread { inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY) }.start()
+                inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                 return true
             }
 
@@ -218,13 +218,12 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     MotionEvent.ACTION_DOWN -> {
                         // Start of the second tap in a double-tap: Start dragging!
                         isDragging = true
-                        Thread { inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY) }.start()
+                        inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     }
                     MotionEvent.ACTION_UP -> {
-                        if (isDragging) {
-                            isDragging = false
-                            Thread { inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY) }.start()
-                        }
+                        // Sometimes the double tap event finishes immediately upon lift.
+                        // However, we handle the UP event in the main onTouchListener below
+                        // so that drag-and-drop behaves identically to a normal trackpad.
                     }
                 }
                 return true
@@ -233,7 +232,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             override fun onLongPress(e: MotionEvent) {
                 // Long press acts as a normal click holding down
                 isDragging = true
-                Thread { inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY) }.start()
+                inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
             }
         })
 
@@ -266,14 +265,14 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 MotionEvent.ACTION_POINTER_UP -> {
                     if (event.pointerCount == 3) {
                         // 3-finger tap for right click
-                        Thread { inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY) }.start()
+                        inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (isDragging) {
                         isDragging = false
-                        Thread { inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY) }.start()
+                        inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     }
                     true
                 }
@@ -288,7 +287,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
                             // Inject scroll natively. Since we are using IInputManager reflection,
                             // this happens instantly and smoothly!
-                            Thread { inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount) }.start()
+                            inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount)
 
                             lastY = currentY
                         }
