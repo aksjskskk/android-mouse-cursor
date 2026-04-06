@@ -124,12 +124,20 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 params.height = finalCursorSize
                 windowManager.updateViewLayout(cursorView, params)
             }
-        } else if (key == "touchpad_alpha" || key == "touchpad_size" || key == "full_screen_mode") {
-            // Re-setup touchpad to apply these changes properly
+        } else if (key == "touchpad_alpha" || key == "touchpad_size") {
+            // Live update the touchpad without completely removing and recreating it
+            // to preserve its current dragged location on the screen.
             if (::touchpadView.isInitialized) {
-                windowManager.removeView(touchpadView)
+                val touchpadAlpha = sharedPreferences?.getFloat("touchpad_alpha", 0.5f) ?: 0.5f
+                val sizeMultiplier = sharedPreferences?.getFloat("touchpad_size", 1.0f) ?: 1.0f
+
+                touchpadView.alpha = touchpadAlpha
+
+                val params = touchpadView.layoutParams as WindowManager.LayoutParams
+                params.width = (400 * sizeMultiplier).toInt()
+                params.height = (400 * sizeMultiplier).toInt()
+                windowManager.updateViewLayout(touchpadView, params)
             }
-            setupTouchpad()
         }
     }
 
@@ -206,7 +214,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = Gravity.CENTER
         }
 
-        var isDragging = false
         val gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
@@ -219,11 +226,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         // Start of the second tap in a double-tap: Start dragging!
                         isDragging = true
                         inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        // Sometimes the double tap event finishes immediately upon lift.
-                        // However, we handle the UP event in the main onTouchListener below
-                        // so that drag-and-drop behaves identically to a normal trackpad.
                     }
                 }
                 return true
@@ -269,11 +271,20 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     }
                     true
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_UP -> {
                     if (isDragging) {
                         isDragging = false
                         inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    // Do NOT cancel the drag state on an OS-level ACTION_CANCEL event.
+                    // Injecting a hardware mouse click (SOURCE_MOUSE) while a physical finger
+                    // is touching the screen causes Android's InputDispatcher to forcefully send
+                    // an ACTION_CANCEL to the active touch stream to prevent multi-device ghost touches.
+                    // If we release the drag here, long-presses and double-tap-drags will instantly
+                    // turn into fast normal clicks! We must wait for the physical ACTION_UP.
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -354,6 +365,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         super.onDestroy()
         sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
         if (::touchpadView.isInitialized) windowManager.removeView(touchpadView)
+        if (::cursorView.isInitialized) windowManager.removeView(cursorView)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
