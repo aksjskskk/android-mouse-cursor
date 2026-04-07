@@ -107,6 +107,13 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = Gravity.TOP or Gravity.START
             x = cursorX.toInt()
             y = cursorY.toInt()
+
+            // Allow drawing inside the display cutout (notch/punch-hole) area.
+            // Without this, the system pushes the view down below the status bar,
+            // destroying the 1:1 pixel mapping with our Shizuku hardware injection.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
         }
 
         windowManager.addView(cursorView, cursorParams)
@@ -226,24 +233,17 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         // Dedicated physical-like L and R buttons!
         // This entirely replaces the flaky gesture detector for dragging and right clicking.
 
-        var btnLastX = 0f
-        var btnLastY = 0f
+        // We only use the buttons to send DOWN and UP events.
+        // We do NOT handle movement in the buttons because Android splits touch events.
+        // If a user holds a button with Finger 1, and drags on the touchpad area with Finger 2,
+        // the movement MUST be handled by the touchpad area's listener.
 
         btnLeft.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    btnLastX = event.rawX
-                    btnLastY = event.rawY
                     isDragging = true // Enable moving the item while button is held
                     inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     btnLeft.setBackgroundColor(0x88FFFFFF.toInt()) // Visual feedback
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - btnLastX
-                    val dy = event.rawY - btnLastY
-                    updateCursorPosition(dx, dy)
-                    btnLastX = event.rawX
-                    btnLastY = event.rawY
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -257,18 +257,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         btnRight.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    btnLastX = event.rawX
-                    btnLastY = event.rawY
                     isDragging = true // Enable dragging/drawing with right click held down
                     inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
                     btnRight.setBackgroundColor(0x88FFFFFF.toInt())
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX - btnLastX
-                    val dy = event.rawY - btnLastY
-                    updateCursorPosition(dx, dy)
-                    btnLastX = event.rawX
-                    btnLastY = event.rawY
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -318,8 +309,10 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    lastX = event.rawX
-                    lastY = event.rawY
+                    // event.x and event.y are relative to the view itself.
+                    // This is much safer than rawX/rawY for multi-touch (like holding a button and dragging).
+                    lastX = event.x
+                    lastY = event.y
                     touchpadDownTime = System.currentTimeMillis()
                     totalMoveX = 0f
                     totalMoveY = 0f
@@ -348,22 +341,20 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
                             lastY = currentY
                         }
-                    } else if (event.pointerCount == 1) {
-                        val dx = event.rawX - lastX
-                        val dy = event.rawY - lastY
+                    } else {
+                        // Regardless of pointer count, we track the first pointer's movement to move the cursor.
+                        // Because the L/R buttons are separate views, Android will NOT count the button finger
+                        // as a pointer in this listener. It will only see the finger touching the touchpad area!
+                        val dx = event.x - lastX
+                        val dy = event.y - lastY
 
                         totalMoveX += Math.abs(dx)
                         totalMoveY += Math.abs(dy)
 
                         updateCursorPosition(dx, dy)
 
-                        // NOTE: If they are NOT dragging, we purposely DO NOT inject ACTION_HOVER_MOVE
-                        // through Shizuku 120 times a second. Doing so causes massive IPC binder lag,
-                        // which completely freezes and glitches the UI thread on many devices.
-                        // The custom visual ImageView cursor handles the visual feedback perfectly.
-
-                        lastX = event.rawX
-                        lastY = event.rawY
+                        lastX = event.x
+                        lastY = event.y
                     }
                     true
                 }
