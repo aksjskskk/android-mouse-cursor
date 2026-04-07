@@ -76,6 +76,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
         sharedPreferences.registerOnSharedPreferenceChangeListener(this)
 
+        startBackgroundDragInjector()
+
         // Try to show the native system mouse cursor initially, though many devices
         // won't render it without a physical mouse plugged in. Our custom cursor
         // will serve as the guaranteed fallback.
@@ -156,10 +158,13 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         return START_STICKY
     }
 
-    private var isDragging = false
+    @Volatile private var isDragging = false
+    @Volatile private var isServiceRunning = true
 
     private val displayMetrics = android.util.DisplayMetrics()
-    private var lastInjectTime = 0L
+
+    // Background thread for Shizuku IPC. This prevents the UI thread from freezing during drags.
+    private var dragThread: Thread? = null
 
     // Extracts the dx/dy pointer tracking logic so both the touchpad area AND the buttons
     // can move the cursor. This fixes the issue where holding a button stops cursor movement.
@@ -176,24 +181,27 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
         cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
 
-        // Update visual cursor position
+        // Update visual cursor position on the UI thread
         if (::cursorView.isInitialized) {
             val cursorParams = cursorView.layoutParams as WindowManager.LayoutParams
             cursorParams.x = cursorX.toInt()
             cursorParams.y = cursorY.toInt()
             windowManager.updateViewLayout(cursorView, cursorParams)
         }
+    }
 
-        // If the user is dragging, inject movement so the OS knows where the item is going.
-        // We MUST throttle this to ~60fps (16ms) otherwise Shizuku IPC binder gets completely flooded
-        // causing the UI thread to lock up and freeze the cursor.
-        if (isDragging) {
-            val now = System.currentTimeMillis()
-            if (now - lastInjectTime > 16L) {
-                inputInjector.injectMouseMove(cursorX, cursorY)
-                lastInjectTime = now
+    private fun startBackgroundDragInjector() {
+        dragThread = Thread {
+            while (isServiceRunning) {
+                if (isDragging) {
+                    // Injecting via Shizuku here prevents locking the main UI thread.
+                    inputInjector.injectMouseMove(cursorX, cursorY)
+                }
+                // Throttle the loop to roughly 60fps (16ms)
+                Thread.sleep(16)
             }
         }
+        dragThread?.start()
     }
 
     private fun setupTouchpad() {
@@ -233,17 +241,28 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         // Dedicated physical-like L and R buttons!
         // This entirely replaces the flaky gesture detector for dragging and right clicking.
 
-        // We only use the buttons to send DOWN and UP events.
-        // We do NOT handle movement in the buttons because Android splits touch events.
-        // If a user holds a button with Finger 1, and drags on the touchpad area with Finger 2,
-        // the movement MUST be handled by the touchpad area's listener.
+        // Let's add tracking back to the buttons as well, but using rawX/rawY.
+        // This fully covers Scenario A (holding the button and sliding that SAME finger to drag).
+        // Scenario B (holding button, dragging on touchpad) is handled by the touchpadArea below.
+
+        var btnLastX = 0f
+        var btnLastY = 0f
 
         btnLeft.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                     isDragging = true // Enable moving the item while button is held
                     inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     btnLeft.setBackgroundColor(0x88FFFFFF.toInt()) // Visual feedback
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - btnLastX
+                    val dy = event.rawY - btnLastY
+                    updateCursorPosition(dx, dy)
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -257,9 +276,18 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         btnRight.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                     isDragging = true // Enable dragging/drawing with right click held down
                     inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
                     btnRight.setBackgroundColor(0x88FFFFFF.toInt())
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - btnLastX
+                    val dy = event.rawY - btnLastY
+                    updateCursorPosition(dx, dy)
+                    btnLastX = event.rawX
+                    btnLastY = event.rawY
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -387,6 +415,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
     override fun onDestroy() {
         super.onDestroy()
+        isServiceRunning = false
+        dragThread?.interrupt()
+
         sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
         if (::touchpadView.isInitialized) windowManager.removeView(touchpadView)
         if (::cursorView.isInitialized) windowManager.removeView(cursorView)
