@@ -152,6 +152,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
     private var isDragging = false
 
     private val displayMetrics = android.util.DisplayMetrics()
+    private var lastInjectTime = 0L
 
     // Extracts the dx/dy pointer tracking logic so both the touchpad area AND the buttons
     // can move the cursor. This fixes the issue where holding a button stops cursor movement.
@@ -177,8 +178,14 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         }
 
         // If the user is dragging, inject movement so the OS knows where the item is going.
+        // We MUST throttle this to ~60fps (16ms) otherwise Shizuku IPC binder gets completely flooded
+        // causing the UI thread to lock up and freeze the cursor.
         if (isDragging) {
-            inputInjector.injectMouseMove(cursorX, cursorY)
+            val now = System.currentTimeMillis()
+            if (now - lastInjectTime > 16L) {
+                inputInjector.injectMouseMove(cursorX, cursorY)
+                lastInjectTime = now
+            }
         }
     }
 
@@ -303,8 +310,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         var totalMoveY = 0f
 
         touchpadArea.setOnTouchListener { _, event ->
-            // Prevent infinite loops by totally ignoring our own injected native mouse events
-            if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
+            // Prevent infinite loops by totally ignoring our own injected native events.
+            // We set deviceId to 1337 in ShizukuInputInjector for exactly this reason.
+            if (event.deviceId == 1337) {
                 return@setOnTouchListener false
             }
 
