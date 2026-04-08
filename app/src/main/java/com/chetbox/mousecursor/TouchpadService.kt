@@ -328,6 +328,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = Gravity.CENTER
         }
 
+        // المتغيرات الخاصة بلوحة اللمس
         var lastX = 0f
         var lastY = 0f
         var isTwoFingerScroll = false
@@ -335,29 +336,35 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         var totalMoveX = 0f
         var totalMoveY = 0f
 
+        // المتغيرات الجديدة للحل الذكي (السحب والإفلات بالنقر المزدوج)
+        var lastTapTime = 0L
+        var isDraggingGesture = false
+
         touchpadArea.setOnTouchListener { _, event ->
-            // Prevent infinite loops by totally ignoring our own injected native events.
-            // We set deviceId to 1337 in ShizukuInputInjector for exactly this reason.
             if (event.deviceId == 1337) {
                 return@setOnTouchListener false
             }
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    // event.x and event.y are relative to the view itself.
-                    // This is much safer than rawX/rawY for multi-touch (like holding a button and dragging).
                     lastX = event.x
                     lastY = event.y
                     touchpadDownTime = System.currentTimeMillis()
                     totalMoveX = 0f
                     totalMoveY = 0f
                     isTwoFingerScroll = false
+
+                    // الحل الذكي: فحص النقر المزدوج مع الاستمرار لبدء السحب
+                    if (touchpadDownTime - lastTapTime < 250) { // 250ms هو الوقت بين النقرتين
+                        isDraggingGesture = true
+                        inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                    }
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     if (event.pointerCount == 2) {
                         isTwoFingerScroll = true
-                        lastY = event.getY(0) // Track vertical movement of the first finger for scrolling
+                        lastY = event.getY(0)
                     }
                     true
                 }
@@ -365,39 +372,39 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     if (isTwoFingerScroll && event.pointerCount == 2) {
                         val currentY = event.getY(0)
                         val dy = currentY - lastY
-
-                        // Optimize scroll speed: inject proportional scroll values based on distance swiped
                         if (Math.abs(dy) > 10) {
-                            val scrollAmount = (dy / -20f) // negative is up, positive is down, adjust divisor for speed
-
-                            // Inject scroll natively. Since we are using IInputManager reflection,
-                            // this happens instantly and smoothly!
+                            val scrollAmount = (dy / -20f)
                             inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount)
-
                             lastY = currentY
                         }
                     } else {
-                        // Regardless of pointer count, we track the first pointer's movement to move the cursor.
-                        // Because the L/R buttons are separate views, Android will NOT count the button finger
-                        // as a pointer in this listener. It will only see the finger touching the touchpad area!
                         val dx = event.x - lastX
                         val dy = event.y - lastY
-
                         totalMoveX += Math.abs(dx)
                         totalMoveY += Math.abs(dy)
-
                         updateCursorPosition(dx, dy)
-
                         lastX = event.x
                         lastY = event.y
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    // Detect a quick tap to simulate a normal left click without using the L button
                     val timeHeld = System.currentTimeMillis() - touchpadDownTime
-                    if (timeHeld < 200 && totalMoveX < 15f && totalMoveY < 15f) {
+
+                    if (isDraggingGesture) {
+                        // إفلات (Drop): المستخدم رفع إصبعه بعد عملية سحب
+                        isDraggingGesture = false
+                        inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                        lastTapTime = 0L // تصفير العداد
+
+                    } else if (!isTwoFingerScroll && timeHeld < 200 && totalMoveX < 15f && totalMoveY < 15f) {
+                        // هنا تم إصلاح خطأ السحب بإضافة (!isTwoFingerScroll)
+                        // نقرة عادية (Single Tap)
                         inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                        lastTapTime = System.currentTimeMillis() // نسجل وقت النقرة تحسباً لنقرة مزدوجة بعدها
+
+                    } else {
+                        lastTapTime = 0L // إذا طالت المدة أو المسافة، نلغي النقر المزدوج
                     }
                     true
                 }
