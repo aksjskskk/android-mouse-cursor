@@ -174,12 +174,15 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         cursorX += dx * sensitivity
         cursorY += dy * sensitivity
 
-        // Dynamically fetch screen size so boundary clamping works after orientation changes
-        windowManager.defaultDisplay.getRealMetrics(displayMetrics)
+        // Use Resources.getSystem() to guarantee we get absolute maximum device hardware pixels,
+        // rather than window-constrained or orientation-lagged metrics from WindowManager.
+        // This is crucial for SOURCE_TOUCHSCREEN injection boundaries.
+        val width = android.content.res.Resources.getSystem().displayMetrics.widthPixels.toFloat()
+        val height = android.content.res.Resources.getSystem().displayMetrics.heightPixels.toFloat()
 
         // Allow the cursor to move freely in the logical display space.
-        cursorX = cursorX.coerceIn(0f, displayMetrics.widthPixels.toFloat())
-        cursorY = cursorY.coerceIn(0f, displayMetrics.heightPixels.toFloat())
+        cursorX = cursorX.coerceIn(0f, width)
+        cursorY = cursorY.coerceIn(0f, height)
 
         // Update visual cursor position on the UI thread
         if (::cursorView.isInitialized) {
@@ -249,6 +252,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         var btnLastY = 0f
 
         btnLeft.setOnTouchListener { _, event ->
+            if (event.deviceId == 1337) return@setOnTouchListener false
+
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     btnLastX = event.rawX
@@ -274,6 +279,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         }
 
         btnRight.setOnTouchListener { _, event ->
+            if (event.deviceId == 1337) return@setOnTouchListener false
+
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     btnLastX = event.rawX

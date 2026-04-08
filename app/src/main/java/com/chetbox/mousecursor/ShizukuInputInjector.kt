@@ -111,79 +111,38 @@ class ShizukuInputInjector(private val context: Context) {
 
         // If a finger is currently holding down a drag, we inject ACTION_MOVE to pull the item.
         if (downTime > 0) {
-            val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+            val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER } }
             val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
 
-            val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, props, coords, 0, MotionEvent.BUTTON_PRIMARY, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
+            val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
             injectEvent(moveEvent)
             moveEvent.recycle()
-        } else {
-            // Revert back to injecting HOVER so the OS hardware cursor stays perfectly synced
-            // with our logical cursor, meaning clicks will never have an invisible offset.
-            val hoverEvent = MotionEvent.obtain(
-                eventTime, eventTime, MotionEvent.ACTION_HOVER_MOVE, x, y, 0
-            )
-            hoverEvent.source = InputDevice.SOURCE_MOUSE
-
-            // Set deviceId via reflection since the field is not public in all Android versions
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                try {
-                    val setDeviceIdMethod = MotionEvent::class.java.getMethod("setDeviceId", Int::class.javaPrimitiveType)
-                    setDeviceIdMethod.invoke(hoverEvent, 1337)
-                } catch (e: Exception) {}
-            }
-
-            injectEvent(hoverEvent)
-            hoverEvent.recycle()
         }
     }
 
     fun injectMouseDown(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
-        // Sync the OS cursor position
-        injectMouseMove(x, y)
-
         downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
 
-        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER } }
         val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
 
-        val downEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, 1, props, coords, 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
-        val buttonPressEvent = MotionEvent.obtain(downTime, eventTime + 5, MotionEvent.ACTION_BUTTON_PRESS, 1, props, coords, 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
-
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            try {
-                val setActionButtonMethod = MotionEvent::class.java.getDeclaredMethod("setActionButton", Int::class.javaPrimitiveType)
-                setActionButtonMethod.invoke(buttonPressEvent, buttonState)
-            } catch (e: Exception) {}
-        }
+        val downEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
 
         injectEvent(downEvent)
-        injectEvent(buttonPressEvent)
         downEvent.recycle()
-        buttonPressEvent.recycle()
     }
 
     fun injectMouseUp(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         if (downTime == 0L) downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
 
-        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER } }
         val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
 
-        val buttonReleaseEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_BUTTON_RELEASE, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
-        val upEvent = MotionEvent.obtain(downTime, eventTime + 5, MotionEvent.ACTION_UP, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
+        val upEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            try {
-                val setActionButtonMethod = MotionEvent::class.java.getDeclaredMethod("setActionButton", Int::class.javaPrimitiveType)
-                setActionButtonMethod.invoke(buttonReleaseEvent, buttonState)
-            } catch (e: Exception) {}
-        }
-
-        injectEvent(buttonReleaseEvent)
         injectEvent(upEvent)
-        buttonReleaseEvent.recycle()
         upEvent.recycle()
 
         downTime = 0L // Reset drag state
@@ -206,7 +165,7 @@ class ShizukuInputInjector(private val context: Context) {
         val props = Array(1) {
             MotionEvent.PointerProperties().apply {
                 id = 0
-                toolType = MotionEvent.TOOL_TYPE_MOUSE
+                toolType = MotionEvent.TOOL_TYPE_FINGER
             }
         }
         val coords = Array(1) {
@@ -219,7 +178,7 @@ class ShizukuInputInjector(private val context: Context) {
 
         val scrollEvent = MotionEvent.obtain(
             eventTime, eventTime, MotionEvent.ACTION_SCROLL,
-            1, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0
+            1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0
         )
 
         injectEvent(scrollEvent)
