@@ -166,6 +166,10 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
     // Background thread for Shizuku IPC. This prevents the UI thread from freezing during drags.
     private var dragThread: Thread? = null
 
+    // متغيرات الإزاحة لحل مشكلة الدقة (قم بزيادتها أو تقليلها حسب مساحة الفراغ في صورتك)
+    private val HOTSPOT_X = 15f
+    private val HOTSPOT_Y = 20f
+
     // Extracts the dx/dy pointer tracking logic so both the touchpad area AND the buttons
     // can move the cursor. This fixes the issue where holding a button stops cursor movement.
     private fun updateCursorPosition(dx: Float, dy: Float) {
@@ -198,7 +202,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             while (isServiceRunning) {
                 if (isDragging) {
                     // Injecting via Shizuku here prevents locking the main UI thread.
-                    inputInjector.injectMouseMove(cursorX, cursorY)
+                    // We apply the HOTSPOT offset so hardware clicks align with the visual pointer.
+                    inputInjector.injectMouseMove(cursorX + HOTSPOT_X, cursorY + HOTSPOT_Y)
                 }
                 // Throttle the loop to roughly 60fps (16ms)
                 Thread.sleep(16)
@@ -254,12 +259,15 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         btnLeft.setOnTouchListener { _, event ->
             if (event.deviceId == 1337) return@setOnTouchListener false
 
+            val targetX = cursorX + HOTSPOT_X
+            val targetY = cursorY + HOTSPOT_Y
+
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     btnLastX = event.rawX
                     btnLastY = event.rawY
                     isDragging = true // Enable moving the item while button is held
-                    inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                    inputInjector.injectMouseDown(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
                     btnLeft.setBackgroundColor(0x88FFFFFF.toInt()) // Visual feedback
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -271,7 +279,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
-                    inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                    inputInjector.injectMouseUp(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
                     btnLeft.setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             }
@@ -281,12 +289,15 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         btnRight.setOnTouchListener { _, event ->
             if (event.deviceId == 1337) return@setOnTouchListener false
 
+            val targetX = cursorX + HOTSPOT_X
+            val targetY = cursorY + HOTSPOT_Y
+
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     btnLastX = event.rawX
                     btnLastY = event.rawY
                     isDragging = true // Enable dragging/drawing with right click held down
-                    inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
+                    inputInjector.injectMouseDown(targetX, targetY, MotionEvent.BUTTON_SECONDARY)
                     btnRight.setBackgroundColor(0x88FFFFFF.toInt())
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -298,7 +309,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
-                    inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_SECONDARY)
+                    inputInjector.injectMouseUp(targetX, targetY, MotionEvent.BUTTON_SECONDARY)
                     btnRight.setBackgroundColor(android.graphics.Color.TRANSPARENT)
                 }
             }
@@ -341,9 +352,11 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         var isDraggingGesture = false
 
         touchpadArea.setOnTouchListener { _, event ->
-            if (event.deviceId == 1337) {
-                return@setOnTouchListener false
-            }
+            if (event.deviceId == 1337) return@setOnTouchListener false
+
+            // حساب الإحداثيات الفعلية التي يجب النقر عليها
+            val targetX = cursorX + HOTSPOT_X
+            val targetY = cursorY + HOTSPOT_Y
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -354,23 +367,19 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     totalMoveY = 0f
                     isTwoFingerScroll = false
 
-                    // النقر المزدوج للسحب
                     if (touchpadDownTime - lastTapTime < 250) {
                         isDraggingGesture = true
-                        inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                        inputInjector.injectMouseDown(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
                     }
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     if (event.pointerCount == 2) {
                         isTwoFingerScroll = true
-
-                        // إصلاح خطأ الـ Scroll: إذا بدأ سحب بالخطأ، قم بإلغائه فوراً
                         if (isDraggingGesture) {
                             isDraggingGesture = false
-                            inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                            inputInjector.injectMouseUp(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
                         }
-
                         lastY = event.getY(0)
                     }
                     true
@@ -380,8 +389,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         val currentY = event.getY(0)
                         val dy = currentY - lastY
                         if (Math.abs(dy) > 10) {
-                            val scrollAmount = (dy / -20f)
-                            inputInjector.injectMouseScroll(cursorX, cursorY, scrollAmount)
+                            inputInjector.injectMouseScroll(targetX, targetY, dy / -20f)
                             lastY = currentY
                         }
                     } else {
@@ -392,6 +400,11 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         updateCursorPosition(dx, dy)
                         lastX = event.x
                         lastY = event.y
+
+                        // تحديث مستمر للسحب في الخلفية
+                        if (isDraggingGesture) {
+                            inputInjector.injectMouseMove(cursorX + HOTSPOT_X, cursorY + HOTSPOT_Y)
+                        }
                     }
                     true
                 }
@@ -400,18 +413,15 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
                     if (isDraggingGesture) {
                         isDraggingGesture = false
-                        inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                        inputInjector.injectMouseUp(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
                         lastTapTime = 0L
-
                     } else if (!isTwoFingerScroll && timeHeld < 200 && totalMoveX < 15f && totalMoveY < 15f) {
-                        inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                        inputInjector.injectMouseClick(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
                         lastTapTime = System.currentTimeMillis()
-
                     } else {
                         lastTapTime = 0L
                     }
-
-                    isTwoFingerScroll = false // تصفير حالة التمرير
+                    isTwoFingerScroll = false
                     true
                 }
                 else -> false
