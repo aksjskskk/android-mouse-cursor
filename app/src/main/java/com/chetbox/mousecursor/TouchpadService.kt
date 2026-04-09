@@ -354,8 +354,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     totalMoveY = 0f
                     isTwoFingerScroll = false
 
-                    // الحل الذكي: فحص النقر المزدوج مع الاستمرار لبدء السحب
-                    if (touchpadDownTime - lastTapTime < 250) { // 250ms هو الوقت بين النقرتين
+                    // النقر المزدوج للسحب
+                    if (touchpadDownTime - lastTapTime < 250) {
                         isDraggingGesture = true
                         inputInjector.injectMouseDown(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
                     }
@@ -364,6 +364,13 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     if (event.pointerCount == 2) {
                         isTwoFingerScroll = true
+
+                        // إصلاح خطأ الـ Scroll: إذا بدأ سحب بالخطأ، قم بإلغائه فوراً
+                        if (isDraggingGesture) {
+                            isDraggingGesture = false
+                            inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
+                        }
+
                         lastY = event.getY(0)
                     }
                     true
@@ -392,20 +399,19 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     val timeHeld = System.currentTimeMillis() - touchpadDownTime
 
                     if (isDraggingGesture) {
-                        // إفلات (Drop): المستخدم رفع إصبعه بعد عملية سحب
                         isDraggingGesture = false
                         inputInjector.injectMouseUp(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
-                        lastTapTime = 0L // تصفير العداد
+                        lastTapTime = 0L
 
                     } else if (!isTwoFingerScroll && timeHeld < 200 && totalMoveX < 15f && totalMoveY < 15f) {
-                        // هنا تم إصلاح خطأ السحب بإضافة (!isTwoFingerScroll)
-                        // نقرة عادية (Single Tap)
                         inputInjector.injectMouseClick(cursorX, cursorY, MotionEvent.BUTTON_PRIMARY)
-                        lastTapTime = System.currentTimeMillis() // نسجل وقت النقرة تحسباً لنقرة مزدوجة بعدها
+                        lastTapTime = System.currentTimeMillis()
 
                     } else {
-                        lastTapTime = 0L // إذا طالت المدة أو المسافة، نلغي النقر المزدوج
+                        lastTapTime = 0L
                     }
+
+                    isTwoFingerScroll = false // تصفير حالة التمرير
                     true
                 }
                 else -> false

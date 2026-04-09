@@ -110,11 +110,11 @@ class ShizukuInputInjector(private val context: Context) {
         val eventTime = SystemClock.uptimeMillis()
 
         if (downTime > 0) {
-            // تم تغيير id إلى 10، وإرجاع toolType إلى MOUSE لدقة البكسل
             val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
             val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
 
-            val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
+            // استخدام SOURCE_TOUCHSCREEN يمنع المنطقة الميتة، واستخدام id=10 يمنع التجمد
+            val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
             injectEvent(moveEvent)
             moveEvent.recycle()
         }
@@ -127,8 +127,7 @@ class ShizukuInputInjector(private val context: Context) {
         val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
         val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
 
-        // المعامل الثامن هنا تم تغييره من 0 إلى buttonState لتفعيل الكليك الأيمن
-        val downEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, 1, props, coords, 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
+        val downEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, 1, props, coords, 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
 
         injectEvent(downEvent)
         downEvent.recycle()
@@ -141,8 +140,7 @@ class ShizukuInputInjector(private val context: Context) {
         val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
         val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
 
-        // تمرير buttonState هنا أيضاً
-        val upEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, 1, props, coords, 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
+        val upEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, 1, props, coords, 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
 
         injectEvent(upEvent)
         upEvent.recycle()
@@ -160,27 +158,13 @@ class ShizukuInputInjector(private val context: Context) {
 
     fun injectMouseScroll(x: Float, y: Float, scrollY: Float) {
         injectMouseMove(x, y)
-
         val eventTime = SystemClock.uptimeMillis()
 
-        val props = Array(1) {
-            MotionEvent.PointerProperties().apply {
-                id = 10 // تغيير المعرف
-                toolType = MotionEvent.TOOL_TYPE_MOUSE // العودة لوضع الماوس الدقيق
-            }
-        }
-        val coords = Array(1) {
-            MotionEvent.PointerCoords().apply {
-                this.x = x
-                this.y = y
-                setAxisValue(MotionEvent.AXIS_VSCROLL, scrollY)
-            }
-        }
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+        val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; setAxisValue(MotionEvent.AXIS_VSCROLL, scrollY) } }
 
-        val scrollEvent = MotionEvent.obtain(
-            eventTime, eventTime, MotionEvent.ACTION_SCROLL,
-            1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0
-        )
+        // التمرير (Scroll) يبقى على SOURCE_MOUSE لأن بعض التطبيقات لا تقبل التمرير من شاشة اللمس
+        val scrollEvent = MotionEvent.obtain(eventTime, eventTime, MotionEvent.ACTION_SCROLL, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
 
         injectEvent(scrollEvent)
         scrollEvent.recycle()
