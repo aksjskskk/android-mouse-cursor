@@ -18,12 +18,13 @@ class ShizukuInputInjector(private val context: Context) {
     private var setDisplayIdMethod: Method? = null
     private var downTime: Long = 0L
 
+    // الحل السحري لمنع التجمد: حفظ حالة الزر المضغوط أثناء السحب
+    private var currentButtonState: Int = 0
+
     init {
         setupIInputManager()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            try {
-                setDisplayIdMethod = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-            } catch (e: Exception) {}
+            try { setDisplayIdMethod = MotionEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType) } catch (e: Exception) {}
         }
     }
 
@@ -45,34 +46,30 @@ class ShizukuInputInjector(private val context: Context) {
     }
 
     private fun injectEvent(event: MotionEvent) {
-        if (iInputManager == null || injectInputEventMethod == null) {
-            setupIInputManager()
-            if (iInputManager == null) return
-        }
+        if (iInputManager == null) return
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             try { setDisplayIdMethod?.invoke(event, 0) } catch (e: Exception) {}
         }
-        try {
-            // INJECT_INPUT_EVENT_MODE_ASYNC = 0
-            injectInputEventMethod?.invoke(iInputManager, event, 0)
-        } catch (e: Exception) {
-            Log.e("ShizukuInputInjector", "Injection failed: ${e.message}")
-        }
+        try { injectInputEventMethod?.invoke(iInputManager, event, 0) } catch (e: Exception) {}
     }
 
-    // هنا السحر: نستخدم TOOL_TYPE_STYLUS (قلم ذكي) للحصول على دقة فائقة، و SOURCE_TOUCHSCREEN لإلغاء المنطقة الميتة
+    // استخدمنا TOUCHSCREEN لقتل الـ Dead Zone، و TOOL_TYPE_MOUSE مع id=10 للدقة
     private fun createPointerCoords(x: Float, y: Float): Array<MotionEvent.PointerCoords> {
         return Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
     }
 
     private fun createPointerProps(): Array<MotionEvent.PointerProperties> {
-        return Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_STYLUS } }
+        return Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
     }
 
     fun injectMouseMove(x: Float, y: Float) {
         if (downTime > 0) {
             val eventTime = SystemClock.uptimeMillis()
-            val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, createPointerProps(), createPointerCoords(x, y), 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+            val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+            val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
+
+            // تمرير currentButtonState بدلاً من 0 يمنع التجمد نهائياً!
+            val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, props, coords, 0, currentButtonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
             injectEvent(moveEvent)
             moveEvent.recycle()
         }
@@ -80,7 +77,13 @@ class ShizukuInputInjector(private val context: Context) {
 
     fun injectMouseDown(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         downTime = SystemClock.uptimeMillis()
-        val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, 1, createPointerProps(), createPointerCoords(x, y), 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        currentButtonState = buttonState // نحفظ الزر هنا
+        val eventTime = SystemClock.uptimeMillis()
+
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+        val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
+
+        val downEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_DOWN, 1, props, coords, 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
         injectEvent(downEvent)
         downEvent.recycle()
     }
@@ -88,10 +91,16 @@ class ShizukuInputInjector(private val context: Context) {
     fun injectMouseUp(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         if (downTime == 0L) downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
-        val upEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, 1, createPointerProps(), createPointerCoords(x, y), 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
+        val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
+
+        val upEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
         injectEvent(upEvent)
         upEvent.recycle()
+
         downTime = 0L
+        currentButtonState = 0 // تصفير الزر
     }
 
     fun injectMouseClick(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
@@ -101,9 +110,13 @@ class ShizukuInputInjector(private val context: Context) {
     }
 
     fun injectMouseScroll(x: Float, y: Float, scrollY: Float) {
+        injectMouseMove(x, y)
         val eventTime = SystemClock.uptimeMillis()
+        val props = Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_MOUSE } }
         val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; setAxisValue(MotionEvent.AXIS_VSCROLL, scrollY) } }
-        val scrollEvent = MotionEvent.obtain(eventTime, eventTime, MotionEvent.ACTION_SCROLL, 1, createPointerProps(), coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
+
+        // الـ Scroll يبقى MOUSE ليعمل مع كل التطبيقات
+        val scrollEvent = MotionEvent.obtain(eventTime, eventTime, MotionEvent.ACTION_SCROLL, 1, props, coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
         injectEvent(scrollEvent)
         scrollEvent.recycle()
     }

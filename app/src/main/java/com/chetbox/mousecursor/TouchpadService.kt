@@ -76,6 +76,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
         sharedPreferences.registerOnSharedPreferenceChangeListener(this)
 
+        startBackgroundDragInjector()
+
         // Try to show the native system mouse cursor initially, though many devices
         // won't render it without a physical mouse plugged in. Our custom cursor
         // will serve as the guaranteed fallback.
@@ -156,9 +158,12 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         return START_STICKY
     }
 
-    private var isDragging = false
+    @Volatile private var isDragging = false
+    @Volatile private var isServiceRunning = true
 
     private val displayMetrics = android.util.DisplayMetrics()
+
+    private var dragThread: Thread? = null
 
     // متغيرات الإزاحة
     private val HOTSPOT_X = 15f
@@ -189,6 +194,19 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             cursorParams.y = cursorY.toInt()
             windowManager.updateViewLayout(cursorView, cursorParams)
         }
+    }
+
+    private fun startBackgroundDragInjector() {
+        dragThread = Thread {
+            while (isServiceRunning) {
+                if (isDragging) {
+                    // السحب سيعمل الآن بسلاسة تامة مع الدقة!
+                    inputInjector.injectMouseMove(cursorX + HOTSPOT_X, cursorY + HOTSPOT_Y)
+                }
+                Thread.sleep(16)
+            }
+        }
+        dragThread?.start()
     }
 
     private fun setupTouchpad() {
@@ -245,9 +263,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 MotionEvent.ACTION_DOWN -> {
                     btnLastX = event.rawX
                     btnLastY = event.rawY
-                    isDragging = true // Enable moving the item while button is held
+                    isDragging = true
                     inputInjector.injectMouseDown(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
-                    btnLeft.setBackgroundColor(0x88FFFFFF.toInt()) // Visual feedback
+                    btnLeft.setBackgroundColor(0x88FFFFFF.toInt())
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - btnLastX
@@ -255,6 +273,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     updateCursorPosition(dx, dy)
                     btnLastX = event.rawX
                     btnLastY = event.rawY
+
+                    // تحديث موقع السحب للإصبع الوهمي
+                    inputInjector.injectMouseMove(cursorX + HOTSPOT_X, cursorY + HOTSPOT_Y)
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -275,7 +296,7 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                 MotionEvent.ACTION_DOWN -> {
                     btnLastX = event.rawX
                     btnLastY = event.rawY
-                    isDragging = true // Enable dragging/drawing with right click held down
+                    isDragging = true
                     inputInjector.injectMouseDown(targetX, targetY, MotionEvent.BUTTON_SECONDARY)
                     btnRight.setBackgroundColor(0x88FFFFFF.toInt())
                 }
@@ -285,6 +306,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     updateCursorPosition(dx, dy)
                     btnLastX = event.rawX
                     btnLastY = event.rawY
+
+                    inputInjector.injectMouseMove(cursorX + HOTSPOT_X, cursorY + HOTSPOT_Y)
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isDragging = false
@@ -318,7 +341,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             gravity = Gravity.CENTER
         }
 
-        // المتغيرات الخاصة بلوحة اللمس
         var lastX = 0f
         var lastY = 0f
         var isTwoFingerScroll = false
@@ -326,14 +348,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         var totalMoveX = 0f
         var totalMoveY = 0f
 
-        // المتغيرات الجديدة للحل الذكي (السحب والإفلات بالنقر المزدوج)
-        var lastTapTime = 0L
-        var isDraggingGesture = false
-
         touchpadArea.setOnTouchListener { _, event ->
             if (event.deviceId == 1337) return@setOnTouchListener false
 
-            // حساب الإحداثيات الفعلية التي يجب النقر عليها
             val targetX = cursorX + HOTSPOT_X
             val targetY = cursorY + HOTSPOT_Y
 
@@ -345,20 +362,11 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                     totalMoveX = 0f
                     totalMoveY = 0f
                     isTwoFingerScroll = false
-
-                    if (touchpadDownTime - lastTapTime < 250) {
-                        isDraggingGesture = true
-                        inputInjector.injectMouseDown(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
-                    }
                     true
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
                     if (event.pointerCount == 2) {
                         isTwoFingerScroll = true
-                        if (isDraggingGesture) {
-                            isDraggingGesture = false
-                            inputInjector.injectMouseUp(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
-                        }
                         lastY = event.getY(0)
                     }
                     true
@@ -368,7 +376,9 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         val currentY = event.getY(0)
                         val dy = currentY - lastY
                         if (Math.abs(dy) > 10) {
-                            inputInjector.injectMouseScroll(targetX, targetY, dy / -20f)
+                            val scrollAmount = (dy / -20f)
+                            // التمرير أصبح دقيقاً
+                            inputInjector.injectMouseScroll(targetX, targetY, scrollAmount)
                             lastY = currentY
                         }
                     } else {
@@ -379,28 +389,15 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
                         updateCursorPosition(dx, dy)
                         lastX = event.x
                         lastY = event.y
-
-                        // تحديث مستمر للسحب في الخلفية
-                        if (isDraggingGesture) {
-                            inputInjector.injectMouseMove(cursorX + HOTSPOT_X, cursorY + HOTSPOT_Y)
-                        }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     val timeHeld = System.currentTimeMillis() - touchpadDownTime
-
-                    if (isDraggingGesture) {
-                        isDraggingGesture = false
-                        inputInjector.injectMouseUp(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
-                        lastTapTime = 0L
-                    } else if (!isTwoFingerScroll && timeHeld < 200 && totalMoveX < 15f && totalMoveY < 15f) {
+                    if (!isTwoFingerScroll && timeHeld < 200 && totalMoveX < 15f && totalMoveY < 15f) {
+                        // النقر السريع أصبح دقيقاً
                         inputInjector.injectMouseClick(targetX, targetY, MotionEvent.BUTTON_PRIMARY)
-                        lastTapTime = System.currentTimeMillis()
-                    } else {
-                        lastTapTime = 0L
                     }
-                    isTwoFingerScroll = false
                     true
                 }
                 else -> false
@@ -424,6 +421,8 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
     override fun onDestroy() {
         super.onDestroy()
+        isServiceRunning = false
+        dragThread?.interrupt()
 
         sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
         if (::touchpadView.isInitialized) windowManager.removeView(touchpadView)
