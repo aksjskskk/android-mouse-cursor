@@ -76,8 +76,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
         sharedPreferences.registerOnSharedPreferenceChangeListener(this)
 
-        startBackgroundDragInjector()
-
         // Try to show the native system mouse cursor initially, though many devices
         // won't render it without a physical mouse plugged in. Our custom cursor
         // will serve as the guaranteed fallback.
@@ -158,15 +156,11 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
         return START_STICKY
     }
 
-    @Volatile private var isDragging = false
-    @Volatile private var isServiceRunning = true
+    private var isDragging = false
 
     private val displayMetrics = android.util.DisplayMetrics()
 
-    // Background thread for Shizuku IPC. This prevents the UI thread from freezing during drags.
-    private var dragThread: Thread? = null
-
-    // متغيرات الإزاحة لحل مشكلة الدقة (قم بزيادتها أو تقليلها حسب مساحة الفراغ في صورتك)
+    // متغيرات الإزاحة
     private val HOTSPOT_X = 15f
     private val HOTSPOT_Y = 20f
 
@@ -195,21 +189,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
             cursorParams.y = cursorY.toInt()
             windowManager.updateViewLayout(cursorView, cursorParams)
         }
-    }
-
-    private fun startBackgroundDragInjector() {
-        dragThread = Thread {
-            while (isServiceRunning) {
-                if (isDragging) {
-                    // Injecting via Shizuku here prevents locking the main UI thread.
-                    // We apply the HOTSPOT offset so hardware clicks align with the visual pointer.
-                    inputInjector.injectMouseMove(cursorX + HOTSPOT_X, cursorY + HOTSPOT_Y)
-                }
-                // Throttle the loop to roughly 60fps (16ms)
-                Thread.sleep(16)
-            }
-        }
-        dragThread?.start()
     }
 
     private fun setupTouchpad() {
@@ -445,8 +424,6 @@ class TouchpadService : Service(), SharedPreferences.OnSharedPreferenceChangeLis
 
     override fun onDestroy() {
         super.onDestroy()
-        isServiceRunning = false
-        dragThread?.interrupt()
 
         sharedPreferences.unregisterOnSharedPreferenceChangeListener(this)
         if (::touchpadView.isInitialized) windowManager.removeView(touchpadView)

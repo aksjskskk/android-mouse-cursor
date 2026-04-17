@@ -10,7 +10,6 @@ import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 import rikka.shizuku.SystemServiceHelper
 import java.lang.reflect.Method
-import java.util.concurrent.Executors
 
 class ShizukuInputInjector(private val context: Context) {
 
@@ -18,9 +17,6 @@ class ShizukuInputInjector(private val context: Context) {
     private var injectInputEventMethod: Method? = null
     private var setDisplayIdMethod: Method? = null
     private var downTime: Long = 0L
-
-    // الحل الجذري الأول: طابور خلفي مستقل (يمنع التجمد والاختناق تماماً)
-    private val injectionExecutor = Executors.newSingleThreadExecutor()
 
     init {
         setupIInputManager()
@@ -48,53 +44,53 @@ class ShizukuInputInjector(private val context: Context) {
         }
     }
 
-    private fun injectEventAsync(event: MotionEvent) {
-        injectionExecutor.execute {
-            if (iInputManager == null || injectInputEventMethod == null) {
-                setupIInputManager()
-                if (iInputManager == null) return@execute
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                try { setDisplayIdMethod?.invoke(event, 0) } catch (e: Exception) {}
-            }
-            try {
-                injectInputEventMethod?.invoke(iInputManager, event, 0)
-            } catch (e: Exception) {
-                Log.e("ShizukuInputInjector", "Injection failed: ${e.message}")
-            } finally {
-                event.recycle() // إعادة تدوير الحدث هنا بعد الانتهاء منه
-            }
+    private fun injectEvent(event: MotionEvent) {
+        if (iInputManager == null || injectInputEventMethod == null) {
+            setupIInputManager()
+            if (iInputManager == null) return
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            try { setDisplayIdMethod?.invoke(event, 0) } catch (e: Exception) {}
+        }
+        try {
+            // INJECT_INPUT_EVENT_MODE_ASYNC = 0
+            injectInputEventMethod?.invoke(iInputManager, event, 0)
+        } catch (e: Exception) {
+            Log.e("ShizukuInputInjector", "Injection failed: ${e.message}")
         }
     }
 
-    // الحل الجذري الثاني: SOURCE_TOUCHSCREEN لتدمير المنطقة الميتة + size = 0.01f لدقة الإبرة
+    // هنا السحر: نستخدم TOOL_TYPE_STYLUS (قلم ذكي) للحصول على دقة فائقة، و SOURCE_TOUCHSCREEN لإلغاء المنطقة الميتة
     private fun createPointerCoords(x: Float, y: Float): Array<MotionEvent.PointerCoords> {
-        return Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 0.01f } }
+        return Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; pressure = 1.0f; size = 1.0f } }
     }
 
     private fun createPointerProps(): Array<MotionEvent.PointerProperties> {
-        return Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_FINGER } }
+        return Array(1) { MotionEvent.PointerProperties().apply { id = 10; toolType = MotionEvent.TOOL_TYPE_STYLUS } }
     }
 
     fun injectMouseMove(x: Float, y: Float) {
         if (downTime > 0) {
             val eventTime = SystemClock.uptimeMillis()
             val moveEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_MOVE, 1, createPointerProps(), createPointerCoords(x, y), 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
-            injectEventAsync(moveEvent)
+            injectEvent(moveEvent)
+            moveEvent.recycle()
         }
     }
 
     fun injectMouseDown(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         downTime = SystemClock.uptimeMillis()
         val downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, 1, createPointerProps(), createPointerCoords(x, y), 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
-        injectEventAsync(downEvent)
+        injectEvent(downEvent)
+        downEvent.recycle()
     }
 
     fun injectMouseUp(x: Float, y: Float, buttonState: Int = MotionEvent.BUTTON_PRIMARY) {
         if (downTime == 0L) downTime = SystemClock.uptimeMillis()
         val eventTime = SystemClock.uptimeMillis()
         val upEvent = MotionEvent.obtain(downTime, eventTime, MotionEvent.ACTION_UP, 1, createPointerProps(), createPointerCoords(x, y), 0, buttonState, 1f, 1f, 1337, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
-        injectEventAsync(upEvent)
+        injectEvent(upEvent)
+        upEvent.recycle()
         downTime = 0L
     }
 
@@ -108,6 +104,7 @@ class ShizukuInputInjector(private val context: Context) {
         val eventTime = SystemClock.uptimeMillis()
         val coords = Array(1) { MotionEvent.PointerCoords().apply { this.x = x; this.y = y; setAxisValue(MotionEvent.AXIS_VSCROLL, scrollY) } }
         val scrollEvent = MotionEvent.obtain(eventTime, eventTime, MotionEvent.ACTION_SCROLL, 1, createPointerProps(), coords, 0, 0, 1f, 1f, 1337, 0, InputDevice.SOURCE_MOUSE, 0)
-        injectEventAsync(scrollEvent)
+        injectEvent(scrollEvent)
+        scrollEvent.recycle()
     }
 }
